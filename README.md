@@ -8,6 +8,28 @@ Open-source ESPHome firmware for the **QuietCool IT-AF-SMT Smart Attic Fan Contr
 
 ---
 
+## Why replace the stock firmware?
+
+The stock hub is controllable **only over BLE** — your phone has to be within radio range of a box mounted in the attic, and the only client is the QuietCool app. This firmware keeps everything the stock one does and adds a Wi-Fi brain:
+
+| | Stock `IT-BLT-ATTICFAN_V4.1` | This firmware |
+|---|---|---|
+| **Control channel** | BLE only (Wi-Fi is used just for OTA downloads) — phone must be near the attic hub | **Wi-Fi + BLE at the same time** — control from anywhere on your network *while* the stock app keeps working over BLE |
+| **Home Assistant** | — | **Native ESPHome integration**: fan card, temp/humidity sensors, timers, Smart Mode presets — automate against forecasts, presence, electricity prices, anything HA knows |
+| **No Home Assistant?** | BLE app only | **Built-in web UI + REST API** — control from any browser, `curl`, or shell script on the LAN |
+| **Timers** | One in-app countdown | Configurable default run time, delta services (`+30 min` / `-15 min` buttons), absolute "run High for 4 h" service |
+| **Smart Mode** | Fixed decision tree | Same OEM tree and presets, plus per-rule enable/disable switches and temp/humidity calibration offsets |
+| **History** | 31-day rolling log, viewable in the app | Unlimited via HA recorder / long-term statistics |
+| **Power blip at 2 AM** | Fan stays off | Opt-in **Resume on Boot**: speed and remaining timer survive a reboot |
+| **Louvers** | — | Opt-in HIGH pulse on start-up to pop sluggish louvers open |
+| **Safety** | Over-temp + 24 h watchdog | Same cutoffs, plus fail-closed on invalid DIP wiring (stock leaves HIGH unguarded when the DIP is misconfigured) |
+| **Recovery** | Re-flash via app | Layered: auto safe mode, Improv-BLE, captive portal AP, UART — plus one-button stock restore |
+| **Updates & source** | Closed firmware, app-driven updates from the vendor CDN | GPL-3.0 source, unit-tested control logic, OTA from your own machine — fully local, no cloud in the loop |
+
+Switching costs nothing: Wi-Fi credentials, Smart Mode thresholds, presets, and BLE pairings are **auto-imported from the OEM firmware on first boot**, the stock app continues to pair and control as before, and [four escalating paths](#going-back-to-stock) lead back to the byte-perfect stock firmware if you change your mind.
+
+---
+
 ## What you get in Home Assistant
 
 After flashing and pairing, the device exposes the entities below. The fan, sensors, and timer service are the daily-use stuff; the rest are configuration / diagnostic.
