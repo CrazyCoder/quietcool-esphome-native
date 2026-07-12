@@ -38,7 +38,7 @@ Switching costs nothing: Wi-Fi credentials, Smart Mode thresholds, presets, and 
 
 ## Alternatives & prior art
 
-If replacing the firmware isn't for you, several projects control the fan by speaking the stock firmware's BLE protocol from the outside. Credit where due — the protocol reverse-engineering lineage starts with `emerose/quietcool`, which most of the others build on.
+If replacing the firmware isn't for you, several projects control the fan by speaking the stock firmware's BLE protocol from the outside (that protocol is fully documented in [docs/OEM-BLE-PROTOCOL.md](docs/OEM-BLE-PROTOCOL.md)). Credit where due — the protocol reverse-engineering lineage starts with `emerose/quietcool`, which most of the others build on.
 
 | Project | Approach | What you need | Feature surface & constraints |
 |---|---|---|---|
@@ -522,7 +522,7 @@ This complements the HTTP endpoint (`POST /api/flash_url`) and ESPHome OTA: it's
     fan_controller/             # speed control + DIP guards + countdown timer + reboot-resume
     led_state_machine/          # 10 Hz LED driver from world state
     oem_nvs_reader/             # auto-import of OEM Wi-Fi creds at boot (dist build)
-    oem_ble_compat/             # full OEM V2 BLE protocol for stock Smart Control app
+    oem_ble_compat/             # full OEM BLE protocol for the stock Smart Control app (see docs/OEM-BLE-PROTOCOL.md)
     http_flash_handler/         # HTTP endpoint for remote firmware flash
 ```
 
@@ -578,6 +578,12 @@ The cleanup is idempotent: `nvs_erase_key` on an already-missing key returns `ES
 The erased `Group_*` blobs are **not required** by the OEM firmware for normal operation. When the stock firmware boots and finds a missing `Group_*` key, `nvs_get_blob` returns `ESP_ERR_NVS_NOT_FOUND` and the hourly logger simply starts fresh — creating the blob on its next periodic write. No crash, no data loss, no reconfiguration needed.
 
 BLE pair-ids, Smart Mode thresholds, presets, Wi-Fi credentials, and all other OEM settings are untouched by the cleanup. A user who reverts to stock keeps their paired phones and configuration.
+
+---
+
+## OEM BLE protocol
+
+The stock hub speaks a small JSON-over-BLE protocol, and this firmware reimplements it so the OEM QuietCool Smart Control app keeps working. The complete wire reference — transport and framing, the V1 (named) and V2 (numeric) dialects, the pairing/authentication state machine, all 22 commands plus the two binary ones, Smart Mode, presets, and the OTA flow — is documented in **[docs/OEM-BLE-PROTOCOL.md](docs/OEM-BLE-PROTOCOL.md)**, including where this firmware deliberately behaves differently from stock. It's an independent reverse-engineering write-up; useful whether you're reading `oem_ble_compat` or writing your own BLE client for a stock hub.
 
 ---
 
