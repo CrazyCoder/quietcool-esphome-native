@@ -1,0 +1,3 @@
+# cmd.exe misparses batch files with LF-only line endings (rem lines bleed
+# into the parser) — force CRLF on checkout regardless of core.autocrlf.
+*.bat text eol=crlf
