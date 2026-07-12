@@ -1,0 +1,20 @@
+# Development-build credentials package — adds a baked-in API encryption key
+# and OTA password from secrets.yaml. ESPHome `packages:` merges these into
+# the main YAML's `api:` and `ota:` blocks (recursive merge keeps the
+# actions list intact).
+#
+# Selected by default (substitutions.build_mode: dev).
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+  # http_request OTA — enables the stock-restore action wired in the main YAML.
+  # ESPHome packages append list entries during merge, so this coexists with the
+  # esphome OTA above. `id:` lets the http_flash_handler external component
+  # (POST /api/flash_url) drive this OTA programmatically with any URL.
+  - platform: http_request
+    id: http_ota

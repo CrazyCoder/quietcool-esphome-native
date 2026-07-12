@@ -1,0 +1,15 @@
+# Development-build Wi-Fi config — has creds compiled in via secrets.yaml.
+# Selected by default (`substitutions.build_mode: dev` in the main YAML).
+#
+# Switch to wifi-dist.yaml at build time for a credential-free firmware bin
+# that imports OEM creds at boot via the oem_nvs_reader component:
+#   esphome -s build_mode dist compile quietcool-atticfan.yaml
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  # Fallback AP — comes up when no STA connection can be established (e.g.
+  # router down). Same SSID on both dev and dist builds so the Web BLE
+  # installer can locate the device regardless of build mode.
+  ap:
+    ssid: "QuietCool Setup"

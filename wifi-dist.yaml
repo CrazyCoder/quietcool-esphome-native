@@ -1,0 +1,19 @@
+# Distribution-build Wi-Fi config — no creds compiled in.
+# Selected at build time:
+#   esphome -s build_mode dist compile quietcool-atticfan.yaml
+#
+# First-boot connection flow with this config:
+#   1. oem_nvs_reader (priority 800) reads the ESP-IDF "nvs" namespace and,
+#      if the OEM had stored creds via the QuietCool app or Web Installer,
+#      injects them into ESPHome's WiFi preference slot.
+#   2. WiFiComponent (priority 250) sets up, loads the imported creds,
+#      and joins the user's network — no rebuild needed per device.
+#   3. If no usable OEM creds are found, the fallback AP comes up and
+#      Improv-BLE advertising starts for re-onboarding via phone.
+
+wifi:
+  # No ssid / password — networks is left as [] so WiFiComponent::start()
+  # uses the empty-STA preference slot (hash 88491487UL). The
+  # oem_nvs_reader writes to exactly that slot before WIFI setup runs.
+  ap:
+    ssid: "QuietCool Setup"

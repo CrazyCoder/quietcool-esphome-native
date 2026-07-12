@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>QuietCool ESPHome installer</title>
+<style>
+  :root {
+    --bg: #0f1419;
+    --fg: #e6eef5;
+    --muted: #8b9aab;
+    --card: #1a232b;
+    --card-highlight: #1f2c36;
+    --border: #2a3744;
+    --accent: #4ec0ff;
+    --accent-pressed: #2a9ddf;
+    --ok: #58cc6b;
+    --warn: #ffb74a;
+    --err: #ff6b6b;
+    --shadow: 0 1px 0 rgba(255,255,255,.04), 0 4px 12px rgba(0,0,0,.4);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg);
+    font: 16px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 600px; margin: 0 auto; padding: 16px env(safe-area-inset-right, 16px) 32px env(safe-area-inset-left, 16px); }
+  h1 { font-size: 22px; margin: 8px 0 4px; }
+  h2 { font-size: 16px; margin: 24px 0 8px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+  h3 { font-size: 15px; margin: 12px 0 4px; }
+  p { margin: 6px 0; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+    padding: 16px; margin-bottom: 16px; box-shadow: var(--shadow); }
+  .card h2:first-child { margin-top: 0; }
+  .mode-block { background: var(--card-highlight); border: 1px solid var(--border); border-radius: 8px;
+    padding: 12px; margin-top: 10px; }
+  .mode-block.selected { border-color: var(--accent); }
+  .mode-block label.head { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 15px; color: var(--fg); margin: 0; }
+  .mode-block .body { margin-top: 8px; padding-left: 24px; }
+  .mode-block.collapsed .body { display: none; }
+  button { display: block; width: 100%; padding: 14px 16px; font-size: 16px;
+    background: var(--accent); color: #001a26; border: none; border-radius: 10px;
+    cursor: pointer; font-weight: 600; touch-action: manipulation; }
+  button:active { background: var(--accent-pressed); }
+  button:disabled { background: #3a4854; color: #6a7888; cursor: not-allowed; }
+  button.secondary { background: transparent; color: var(--fg); border: 1px solid var(--border); }
+  button.danger { background: var(--err); color: #2c0000; }
+  input[type="text"], input[type="password"], input[type="url"], input[type="number"], textarea {
+    width: 100%; padding: 12px; font-size: 16px; background: #0c1418;
+    color: var(--fg); border: 1px solid var(--border); border-radius: 8px;
+    font-family: inherit; }
+  input[type="text"]:focus, input[type="password"]:focus, input[type="url"]:focus,
+  input[type="number"]:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  input[type="radio"], input[type="checkbox"] {
+    width: auto; height: auto; flex: 0 0 auto; transform: scale(1.2); margin: 0 4px 0 2px;
+    accent-color: var(--accent); cursor: pointer; }
+  label { display: block; font-size: 13px; color: var(--muted); margin: 10px 0 4px; }
+  .row { display: flex; gap: 8px; }
+  .row > * { flex: 1; }
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 100px; font-size: 12px;
+    background: var(--border); color: var(--muted); margin-right: 6px; }
+  .pill.ok { background: rgba(88, 204, 107, .2); color: var(--ok); }
+  .pill.warn { background: rgba(255, 183, 74, .2); color: var(--warn); }
+  .pill.err { background: rgba(255, 107, 107, .2); color: var(--err); }
+  .log { background: #08101580; border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px; font: 12px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    color: var(--muted); white-space: pre-wrap; max-height: 50vh; overflow-y: auto;
+    word-break: break-all; }
+  .log .out { color: var(--fg); }
+  .log .err { color: var(--err); }
+  .log .ok { color: var(--ok); }
+  .log .step { color: var(--accent); font-weight: 600; margin-top: 6px; }
+  details { margin: 8px 0; }
+  summary { color: var(--accent); cursor: pointer; padding: 4px 0; font-size: 14px; }
+  .muted { color: var(--muted); font-size: 14px; }
+  .err { color: var(--err); }
+  .warn { color: var(--warn); }
+  .ok { color: var(--ok); }
+  code { font: 13px ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    background: #0c1418; padding: 1px 5px; border-radius: 4px; }
+  .step-list { padding-left: 22px; margin: 8px 0; }
+  .step-list li { margin: 6px 0; }
+  .progress { height: 4px; background: var(--border); border-radius: 2px; overflow: hidden; margin: 8px 0; }
+  .progress > div { height: 100%; background: var(--accent); width: 0%; transition: width .3s ease; }
+  hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
+  .callout { border-left: 3px solid var(--warn); background: rgba(255,183,74,.08);
+    padding: 10px 12px; border-radius: 0 8px 8px 0; margin: 10px 0; font-size: 14px; }
+  .callout strong { color: var(--warn); }
+</style>
+</head>
+<body>
+<main>
+  <h1>QuietCool ESPHome installer</h1>
+  <p class="muted">Two paths: (1) replace OEM firmware with custom ESPHome via Web BLE (sections 1–6 below), or (2) push any firmware URL onto a hub already running the ESPHome firmware over HTTP (section at the bottom).</p>
+
+  <div class="card" id="card-compat">
+    <h2>1. Browser check</h2>
+    <p id="compat-status">Checking…</p>
+    <p class="muted">Web BLE works in Chrome / Edge on Android &amp; desktop, and in Bluefy on iOS. Firefox and Safari are not supported.</p>
+  </div>
+
+  <div class="card" id="card-target">
+    <h2>2. What do you want to install?</h2>
+    <p class="muted">Both options use the same OEM OTA mechanism — you'll still pick auth, Wi-Fi, etc. below. <strong>Either one only works while the hub is still running OEM firmware</strong>; once it's running the ESPHome firmware, this Web-BLE page can't talk to it anymore — use the <a href="#card-esphome-flash" style="color:var(--accent)">HTTP flash section at the bottom</a> instead.</p>
+
+    <div class="mode-block selected" id="target-esphome-block">
+      <label class="head"><input type="radio" name="target" value="esphome" checked> <strong>Install ESPHome (custom firmware)</strong></label>
+      <div class="body">
+        <p class="muted">Flashes the custom ESPHome image hosted alongside this page. Home-Assistant-native, no cloud, no OEM Android app needed afterwards. Preserves the OEM dual-OTA partition layout so you can still roll back via this same page or the OEM app.</p>
+      </div>
+    </div>
+
+    <div class="mode-block collapsed" id="target-oem-block">
+      <label class="head"><input type="radio" name="target" value="oem"> <strong>Restore OEM factory firmware</strong></label>
+      <div class="body">
+        <p class="muted">Pushes the latest production OEM image (<code>IT-BLT-ATTICFAN_V4.1</code>) from QuietCool's own server. Useful if you want a fresh OEM install or if the hub picked up a buggy update.</p>
+        <p class="muted"><strong>Note:</strong> this only rewrites the app partition. Wi-Fi creds, pair-ids, and Smart Mode thresholds in NVS are kept. For a real reset-to-defaults, the OEM still requires the KEY1 5-second long-hold on the hub itself.</p>
+        <p class="muted">Source: <code>http://myquietcool.com/.../IT-BLT-ATTICFAN_V4.1_*.bin</code>. Verified byte-perfect identical to what the OEM Android app would flash.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" id="card-auth">
+    <h2>3. How will you authenticate?</h2>
+    <p class="muted">The hub rejects every command except <code>Login</code> until a valid pair-id authenticates the session. Pick the path that matches your hub's current state — <strong>read this before connecting</strong>, because once this page grabs the BLE link, the OEM Android app can't talk to the hub at the same time.</p>
+
+    <div class="mode-block selected" id="mode-login-block">
+      <label class="head"><input type="radio" name="auth-mode" value="login" checked> <strong>Brand-new hub, or I have a pair-id</strong></label>
+      <div class="body">
+        <p class="muted">A factory-fresh hub accepts the OEM's built-in test pair-id with no button press — just keep the default below. This also works if you saved a pair-id from a previous run of this wizard in this browser.</p>
+        <label for="pairid">Pair ID (max 100 chars)</label>
+        <input id="pairid" type="text" autocomplete="off" autocapitalize="off" spellcheck="false">
+        <p class="muted">Default <code>1234567dsad8wqw9asasd</code> is the OEM's factory test ID — stops working the first time the OEM Android app pairs with the hub.</p>
+      </div>
+    </div>
+
+    <div class="mode-block collapsed" id="mode-pair-block">
+      <label class="head"><input type="radio" name="auth-mode" value="pair"> <strong>Hub is already in use — put it into pair mode</strong></label>
+      <div class="body">
+        <p>Once the OEM Android app pairs with a hub, the factory test ID stops working and the real pair-id isn't user-visible. This path side-steps that by putting the hub into pair mode so we can register a fresh ID.</p>
+        <p><strong>Pick whichever is easier for you</strong> — both end with the hub advertising as pairable for ~tens of seconds:</p>
+
+        <div class="callout"><strong>Method A — physical button</strong>
+          <ol class="step-list" style="margin: 6px 0 0 0">
+            <li>Find the <strong>Pair</strong> button (KEY2) on the hub. It's the same button used during initial setup.</li>
+            <li>Press and hold it for <strong>3 or more seconds</strong>, then release. LED4 (the pair LED) will change to indicate the hub is pairable.</li>
+            <li>Come back here and click <em>Connect via Bluetooth</em> below — quickly, the window is short.</li>
+          </ol>
+        </div>
+
+        <div class="callout" style="border-left-color: var(--accent); background: rgba(78,192,255,.08)"><strong style="color: var(--accent)">Method B — OEM Android app</strong>
+          <ol class="step-list" style="margin: 6px 0 0 0">
+            <li>Open the <strong>QuietCool Smart Control</strong> app on this phone (or another phone). Tap your hub, then tap <strong>Pair Mode</strong>.</li>
+            <li>Wait until the app confirms pair mode is active.</li>
+            <li><strong>Force-close the OEM app</strong> (swipe it away in the recents view). The hub only allows one BLE central at a time — leaving the app open will block this page from connecting.</li>
+            <li>Come back here and click <em>Connect via Bluetooth</em> below.</li>
+          </ol>
+        </div>
+
+        <p class="muted">When you hit Flash, this wizard will register a fresh random pair-id with the hub and save it in this browser so you can retry without re-running pair mode if anything goes wrong.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" id="card-settings">
+    <h2>4. Wi-Fi for the hub</h2>
+    <p class="muted">The hub will join this network after we connect, then download the new firmware. Fill these in <strong>before</strong> hitting the button below — once Bluetooth connects, the pair-mode window starts ticking and you want to move fast.</p>
+    <label for="ssid">Wi-Fi SSID (max 64 chars)</label>
+    <input id="ssid" type="text" placeholder="MyNetwork" autocomplete="off" autocapitalize="off" spellcheck="false">
+    <label for="pwd">Wi-Fi password (max 32 chars)</label>
+    <input id="pwd" type="password" placeholder="••••••••" autocomplete="off" autocapitalize="off" spellcheck="false">
+
+    <h2 style="margin-top:18px">5. Firmware URL</h2>
+    <p class="muted" id="url-target-info"></p>
+    <input id="url" type="url" autocapitalize="off" spellcheck="false">
+    <p class="muted" id="url-info"></p>
+
+    <hr>
+    <h2 style="margin-top:0">6. Flash</h2>
+    <p class="muted">Hub must be powered and within ~10 m. If you chose <em>put it into pair mode</em> above, make sure pair mode is active (LED4 indicates this) and the OEM app is force-closed first. The button below opens the Bluetooth device picker, connects, then runs the whole flash sequence without prompting again.</p>
+    <button id="btn-flash">Connect &amp; flash</button>
+    <button id="btn-disconnect" class="secondary" style="margin-top:8px; display:none">Disconnect</button>
+    <p id="connect-status" class="muted"></p>
+    <p class="muted">≈3-5 minutes. The hub will disconnect from Bluetooth as soon as flashing begins — that's expected.</p>
+  </div>
+
+  <div class="card" id="card-pairid-saved" style="display:none">
+    <h2>⚠️ Save this Pair ID</h2>
+    <p>Generated and registered with the hub. <strong>Copy it now</strong> — if the flash fails, paste it into the <em>I have a pair-id</em> field above to retry without going through the OEM app's Pair Mode again. Also auto-saved to this browser's local storage.</p>
+    <div class="row" style="margin-top:10px">
+      <input id="generated-pairid" type="text" readonly onclick="this.select()" style="flex:1; font-family:ui-monospace,Menlo,Consolas,monospace; font-size:14px">
+      <button id="btn-copy-pairid" class="secondary" style="flex:0 0 auto; width:auto; padding:12px 16px">Copy</button>
+    </div>
+    <p class="muted" id="copy-status" style="margin-top:6px"></p>
+  </div>
+
+  <div class="card" id="card-progress" style="display:none">
+    <h2>Progress</h2>
+    <div class="progress"><div id="progbar"></div></div>
+    <p id="progress-status"></p>
+    <div id="log" class="log"></div>
+  </div>
+
+  <div class="card" id="card-done" style="display:none">
+    <h2>Done</h2>
+    <p class="ok">OEM acknowledged the OTA request and disconnected. The hub is now downloading and flashing.</p>
+    <p id="done-target-note"></p>
+    <p class="muted">If the hub doesn't come up: it should automatically roll back to the previously-active firmware on next boot — the OEM's dual-OTA partition layout is preserved either way.</p>
+  </div>
+
+  <div class="card" id="card-esphome-flash">
+    <h2>Already running the ESPHome firmware?</h2>
+    <p class="muted">If your hub is already running the ESPHome firmware (so the Web-BLE flow above no longer applies — this firmware doesn't speak OEM BLE), use this section to flash any firmware URL onto it: the OEM stock <code>V4.1</code> to roll back, a custom build hosted somewhere, an alternative ESPHome image, anything. Uses the device's built-in <code>POST /api/flash_url</code> endpoint over plain HTTP, no Bluetooth required.</p>
+
+    <label for="esphome-host">Device hostname or IP</label>
+    <input id="esphome-host" type="text" placeholder="quietcool-atticfan-XXXXXX.local" autocomplete="off" autocapitalize="off" spellcheck="false">
+    <p class="muted">The mDNS name the device announces, OR its LAN IP. Auto-filled from the last successful flash on this browser.</p>
+
+    <label for="esphome-url">Firmware URL (.bin)</label>
+    <input id="esphome-url" type="url" placeholder="https://..." autocomplete="off" autocapitalize="off" spellcheck="false">
+    <p class="muted">Must start with <code>http://</code> or <code>https://</code>. The hub fetches this URL from its Wi-Fi, not from your phone.</p>
+    <div class="callout"><strong>Partition layout matters</strong> — only firmwares built for the OEM IT-AF-SMT layout will flash here (OTA slots at <code>0x20000</code> and <code>0x200000</code>, 1.875 MB each). Safe to flash: the OEM bins from <code>myquietcool.com</code>, this project's own builds (preserve the OEM layout via <code>partitions.csv</code>), and forks that ship the same <code>partitions.csv</code>. Will fail or brick-then-rollback: stock ESPHome builds with the default 4 MB partition layout (different OTA addresses + slot sizes). If a flash succeeds but the device never reappears, power-cycle — ESP-IDF will roll back to the previous firmware in the other slot.</div>
+
+    <label for="esphome-md5">MD5 (optional, 32 hex chars)</label>
+    <input id="esphome-md5" type="text" placeholder="leave empty to skip integrity check" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="32">
+    <p class="muted">If supplied, the OTA aborts before writing if the downloaded bin's MD5 doesn't match — a cheap safety net against the wrong file landing in flash.</p>
+
+    <div class="row" style="margin-top:12px">
+      <button id="btn-esphome-flash">Flash</button>
+      <button id="btn-fill-oem-v41" class="secondary">Pre-fill OEM V4.1</button>
+    </div>
+    <p id="esphome-flash-status" class="muted" style="margin-top:10px"></p>
+
+    <details>
+      <summary>How does this work? / troubleshooting</summary>
+      <p class="muted">The button issues a single <code>POST http://&lt;host&gt;/api/flash_url?url=…&amp;md5=…</code> to the device. The device's <code>http_flash_handler</code> component validates the URL+MD5, returns <code>202 Accepted</code> immediately, then ~500 ms later kicks off the <code>ota.http_request</code> OTA — pulls the bin, writes it to the inactive OTA slot, reboots. The currently-running firmware can never be overwritten (ESP-IDF guarantees this), so the previous bin stays in the other slot for one-OTA rollback if needed.</p>
+      <p class="muted"><strong>No auth on this endpoint</strong> — matches the device's LAN-trust default (api/ota are also passwordless before Home Assistant adoption pushes per-device secrets). To lock it down, add <code>auth: { username, password }</code> under <code>web_server:</code> in your build.</p>
+      <p class="muted"><strong>Common failure modes:</strong></p>
+      <ul class="step-list muted">
+        <li>"Network error" → device hostname doesn't resolve; try the LAN IP instead. The full mDNS name is required, including the MAC suffix (e.g. <code>quietcool-atticfan-abcdef.local</code>, not just <code>quietcool-atticfan</code>).</li>
+        <li>"404 Not Found" → device firmware doesn't have <code>web_server</code> + <code>http_flash_handler</code> wired. Re-flash with a current build that includes them.</li>
+        <li>"400 Missing or empty 'url'" → URL field is empty.</li>
+        <li>"400 MD5 must be exactly 32 hex characters" → trim it; the field accepts both cases but exactly 32 chars are required.</li>
+        <li>POST succeeds but device doesn't come back → check the device's UART/logger output. The OTA may have failed mid-flash; ESP-IDF rollback will boot the previous firmware on next reset. Just power-cycle.</li>
+      </ul>
+    </details>
+  </div>
+
+  <div class="card">
+    <h2>Caveats</h2>
+    <ul class="step-list muted">
+      <li>The OEM firmware does <strong>not</strong> verify signatures on OTA images — anything reachable at the firmware URL gets flashed. Only point this at images you trust.</li>
+      <li>If the hub has been paired with the OEM Android app, the factory test pair ID stops working — use the <em>Pair as new device</em> path instead.</li>
+      <li>Wi-Fi password is transmitted in cleartext over BLE (an OEM trait, not ours). Acceptable for a one-shot bootstrap; BLE range is ~10 m.</li>
+      <li>If the host serving the firmware uses HTTPS, the hub trusts standard public CAs. If your cert isn't trusted, fall back to plain <code>http://</code>.</li>
+    </ul>
+  </div>
+
+  <p class="muted" style="text-align:center;margin-top:16px">
+    Source &amp; design: <a style="color:var(--accent)" href="https://github.com/CrazyCoder/quietcool-esphome-native">quietcool-esphome-native</a> · OEM device QuietCool IT-AF-SMT
+  </p>
+</main>
+<script src="./app.js?v=1"></script>
+</body>
+</html>

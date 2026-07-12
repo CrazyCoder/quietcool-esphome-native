@@ -1,0 +1,1210 @@
+# QuietCool IT-AF-SMT ESPHome replacement firmware.
+# Pin map and DIP encoding reverse-engineered from OEM V4.1 firmware.
+# LEDs are active-LOW. KEY1/KEY2 are active-LOW pulled-up.
+# Relays are mechanical (one-hot invariant enforced by fan_controller).
+
+esphome:
+  name: quietcool-atticfan
+  friendly_name: QuietCool Attic Fan
+  name_add_mac_suffix: true
+  on_boot:
+    priority: -10
+    then:
+      - lambda: |-
+          // Publish OTA partition diagnostics once — fixed per boot lifetime.
+          // (Speeds-available is published by fan_controller after its own
+          // DIP decode runs at HARDWARE-1 priority.)
+          char buf[64];
+          const esp_partition_t *running = esp_ota_get_running_partition();
+          snprintf(buf, sizeof(buf), "%s @ 0x%lx", running->label, (unsigned long)running->address);
+          id(ota_active_partition).publish_state(buf);
+          const esp_partition_t *next = esp_ota_get_next_update_partition(NULL);
+          snprintf(buf, sizeof(buf), "%s @ 0x%lx", next->label, (unsigned long)next->address);
+          id(ota_target_partition).publish_state(buf);
+  # `project:` lets the ESPHome dashboard recognize this device's lineage.
+  # On dist builds (with no compiled-in api_encryption_key / ota_password),
+  # the matching `dashboard_import:` below tells HA where to fetch a
+  # user-customizable wrapper YAML when the user clicks "Adopt this device".
+  # Adoption generates per-device secrets and OTA-pushes them — the shared
+  # bin only handles Wi-Fi onboarding, not key management.
+  project:
+    name: CrazyCoder.quietcool-atticfan
+    version: "1.0.0"
+
+# Build-mode selector. `dev` (default) pulls Wi-Fi creds + api_encryption_key
+# + ota password from secrets.yaml. Override at the command line for a
+# credential-free distribution build:
+#   esphome -s build_mode dist compile quietcool-atticfan.yaml
+# See {wifi,creds}-dev.yaml and {wifi,creds}-dist.yaml — !included via
+# `packages` below. The dist build relies on the ESPHome dashboard's
+# adoption flow to push per-user secrets after first boot.
+substitutions:
+  build_mode: dev
+
+packages:
+  wifi_creds: !include wifi-${build_mode}.yaml
+  api_ota_creds: !include creds-${build_mode}.yaml
+
+# Where the ESPHome dashboard fetches a user-customizable wrapper YAML when
+# a freshly-flashed dist device gets adopted. The dashboard generates a
+# random api.encryption.key + ota password and writes a per-user YAML that
+# wraps this canonical config.
+dashboard_import:
+  package_import_url: github://CrazyCoder/quietcool-esphome-native/quietcool-atticfan.yaml@main
+
+external_components:
+  - source:
+      type: local
+      path: components
+    components: [fan_controller, http_flash_handler, led_state_machine, oem_ble_compat, oem_nvs_reader]
+
+esp32:
+  board: esp-wrover-kit
+  framework:
+    type: esp-idf
+    sdkconfig_options:
+      CONFIG_ESPTOOLPY_FLASHSIZE_4MB: "y"
+  partitions: ./partitions.csv
+
+# OEM-compatible partition layout means OTA slots are 1.875 MB each.
+# Watch for the image to stay under that during compile.
+
+# --- Bump preference flush interval well above ESPHome's 60s default. The OEM
+# allocated only a 16 KB NVS partition (can't be expanded without UART
+# reflash since the partition table comes via OEM-OTA), so we want to
+# coalesce as many cache-dirty preference writes as possible into single
+# NVS commits. Every fan transition writes last_speed/runtime_endpoint;
+# at 60s flush, an actively-used fan can write to NVS 60×/hour. At 600s
+# it's bounded to 6×/hour — same persistence guarantee, 10× less wear and
+# 10× less compaction pressure. Trade-off: up to 10 minutes of state loss
+# on a hard crash, which is acceptable for a fan (boot resume re-arms
+# from the persisted state regardless). ---
+preferences:
+  flash_write_interval: 600s
+
+api:
+  # api.encryption.key is added by creds-${build_mode}.yaml — dev bakes one
+  # in from secrets.yaml; dist leaves it unset so the dashboard adoption
+  # flow generates and pushes a per-user key after onboarding.
+  #
+  # `reboot_timeout: 0s` disables the default-15min "reboot if no HA client"
+  # behavior. For an appliance that must keep operating physically when HA
+  # is briefly down (restart, upgrade, ISP blip), unnecessary reboots make
+  # things worse — every reboot resets the fan state if `Restore Last State
+  # on Boot` is off (the default for OEM parity). ESPHome docs explicitly
+  # support disabling via 0s for this exact use case.
+  reboot_timeout: 0s
+  # extend_runtime action exposed to HA.
+  # Positive `delta_minutes` extends/starts the countdown; negative reduces;
+  # reducing to <= 0 turns the fan off. When the fan is OFF, a positive
+  # delta starts it at the last-known speed (default High first boot).
+  # The cap is set on the fan: block via `max_run_minutes` (default 1440).
+  # Call from HA automations as `esphome.<device>_extend_runtime` with
+  # `delta_minutes: <int>`. Both ints and templated values are accepted.
+  # See fan_controller_logic.h compute_extend_action() for full semantics.
+  actions:
+    - action: extend_runtime
+      variables:
+        delta_minutes: int
+      then:
+        - lambda: |-
+            id(attic_fan).extend_runtime(delta_minutes);
+    # Absolute "run at SPEED for MINUTES" — deterministic counterpart to
+    # extend_runtime. Use from automations that want a known end state
+    # regardless of the fan's prior speed or timer state.
+    #   speed: "off" | "low" | "med" | "high"  (case-insensitive; "medium" also accepted)
+    #   minutes:  0  -> run indefinitely (no auto-off)
+    #            >0  -> run for exactly N minutes (capped at max_run_minutes)
+    #            <0  -> ignored (defensive — bad template values won't act)
+    # speed=off cancels any running timer and turns the fan off regardless of minutes.
+    # Call from HA as `esphome.<device>_set_runtime` with both variables.
+    - action: set_runtime
+      variables:
+        speed: string
+        minutes: int
+      then:
+        - lambda: |-
+            id(attic_fan).set_runtime(speed, minutes);
+    # Smart preset CRUD — create/overwrite, delete, rename.
+    # save_preset snapshots current live thresholds + switches into a named preset.
+    # If a preset with that name exists, it overwrites; otherwise creates a new slot (max 4).
+    - action: save_preset
+      variables:
+        name: string
+      then:
+        - lambda: 'id(oem_ble).save_preset(name);'
+    # delete_preset removes a preset by name. Refuses if it's the last one
+    # (stock app requires at least 1 preset).
+    - action: delete_preset
+      variables:
+        name: string
+      then:
+        - lambda: 'id(oem_ble).delete_preset(name);'
+    - action: rename_preset
+      variables:
+        old_name: string
+        new_name: string
+      then:
+        - lambda: 'id(oem_ble).rename_preset(old_name, new_name);'
+
+# The `ota:` list is provided entirely by creds-${build_mode}.yaml: dev has
+# a password-bearing entry (from secrets.yaml); dist has a password-less
+# entry that the dashboard replaces during adoption.
+
+# --- Read OEM-stored Wi-Fi creds from the ESP-IDF "nvs" namespace
+# at boot (priority 800, before WIFI=250). On a hub that was previously paired
+# via the QuietCool app or the Web Installer, this imports the user's existing
+# Wi-Fi config so a credential-free distribution build joins the network on
+# first boot. On a fresh device or after a successful import, it does nothing.
+# See components/oem_nvs_reader/oem_nvs_reader_logic.h for the decision tree. ---
+oem_nvs_reader:
+  # Factory-test SSIDs that ship in OEM NVS on every hub — must NOT be
+  # imported as user creds. Add others here if more factory creds surface.
+  factory_ssid_blocklist:
+    - HUAWEI
+
+# --- Explicit safe_mode component. Provides the 10x-crash-loop auto-recovery
+# (on by default — `disabled: false`) and is the target the `Safe Mode` button
+# platform below auto-discovers. The KEY2 long-hold gesture reaches safe mode
+# by pressing that button (`id: safe_mode_button`), not via this component
+# directly, so no explicit `id:` is needed here. ---
+safe_mode:
+
+# --- ESP32 Improv-BLE provisioning. Advertises a BLE service that
+# the Web Installer (or any Improv-compatible app) can use to
+# (re-)configure Wi-Fi WITHOUT UART access. Useful for moving the fan to a
+# new house / different SSID. By default the component advertises only when
+# Wi-Fi is unconfigured; KEY2 short-press forces re-advertising even when
+# Wi-Fi is currently connected. ---
+captive_portal:
+
+esp32_improv:
+  id: improv_component
+  authorizer: none
+
+# --- 5-minute idle auto-stop. Re-armed every time KEY2
+# starts Improv-BLE; cancelled when KEY2 toggles it off OR when a client
+# successfully provisions (esp32_improv stops itself on STATE_PROVISIONED).
+# Mode `restart` means a second `.execute()` resets the timer instead of
+# queueing another invocation. Once Improv stops, oem_ble_compat sees it go
+# idle (want_active_()) and resumes OEM BLE on its own — nothing to do here. ---
+script:
+  - id: improv_auto_stop
+    mode: restart
+    then:
+      - delay: 5min
+      - lambda: |-
+          if (id(improv_component).is_active()) {
+            ESP_LOGI("improv", "Auto-stop: 5min idle, halting Improv-BLE");
+            id(improv_component).stop();
+          }
+
+# --- HA-visible status. Polled every 2s from a
+# template binary_sensor so dashboards can show "Improv advertising: ON"
+# without needing the user to be next to the device. The OEM-BLE-vs-Improv
+# advertising contention is handled inside oem_ble_compat (it suspends its
+# own service while Improv is up — see want_active_()), so this is now a
+# pure status mirror. ---
+interval:
+  - interval: 2s
+    then:
+      - lambda: 'id(improv_active_bs).publish_state(id(improv_component).is_active());'
+  # Smart Mode evaluation tick — runs the OEM decision tree every 10s
+  # (aligned with SHT30 update_interval). No-op when Smart Mode is inactive.
+  - interval: 10s
+    then:
+      - lambda: 'id(attic_fan).smart_tick();'
+
+logger:
+  level: DEBUG
+  logs:
+    # Keep most subsystems at INFO; only escalate fan_controller for diagnosis.
+    component: INFO
+    api: INFO
+    wifi: INFO
+    fan_controller: DEBUG
+
+# --- Wall-clock time source. Used by fan_controller for reboot-resume —
+# without it, restore_mode falls back to no-timer-restore (the fan
+# resumes its last speed but any active countdown is cancelled).
+# `sntp` syncs as soon as Wi-Fi is up, independent of HA. Important for the
+# reboot-resume path: if a power outage takes HA down too (e.g. same circuit
+# blew, or shared ISP outage), the fan still gets accurate time and can
+# restore its timer correctly on its own. `homeassistant` source would
+# block here until HA came back. Default servers (pool.ntp.org) are fine. ---
+time:
+  - platform: sntp
+    id: wall_clock
+
+# --- SHT30 temperature + humidity (I2C bus 1 in the OEM; ESPHome only uses
+# one bus by default — the address matches the OEM 0x44). ---
+i2c:
+  sda: 18
+  scl: 19
+  frequency: 100kHz
+  id: i2c_sht30
+
+sensor:
+  # Raw SHT30 readings — kept internal (no `name:`) so the HA-visible
+  # entities are the offset-corrected template sensors below.
+  - platform: sht3xd
+    address: 0x44
+    update_interval: 10s
+    temperature:
+      id: sht30_temp_c
+      on_value:
+        - lambda: |-
+            id(temp_f).publish_state((x + id(temp_offset_c).state) * 9.0f / 5.0f + 32.0f);
+    humidity:
+      id: sht30_humidity
+      on_value:
+        - lambda: |-
+            float v = x + id(humidity_offset_rh).state;
+            if (v < 0.0f) v = 0.0f;
+            if (v > 100.0f) v = 100.0f;
+            id(humidity_rh).publish_state(v);
+
+  # User-visible Fahrenheit reading. Adds the `Temperature Offset` number
+  # entity (defined in the `number:` block below, defaults to 0.0 °C). The OEM
+  # firmware applies NO calibration of any kind — readings drift high by
+  # 3-8 °C (5-14 °F) in typical attic installations because the SHT30 shares
+  # an enclosure with the ESP32 + AC supply (self-heating). The offset lets
+  # end-users empirically null this out per-unit (SHT30 is factory-calibrated
+  # but enclosure self-heating dominates the error).
+  #
+  # Offset is applied at the °C source (before C→F conversion) so it
+  # propagates correctly to any future °C consumer, and so HA can use
+  # its unit-conversion machinery (device_class=temperature on both the
+  # sensor and the number entity) to show metric users °C and imperial
+  # users °F automatically.
+  - platform: template
+    name: "Temperature"
+    id: temp_f
+    unit_of_measurement: "°F"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+    update_interval: never
+
+  - platform: template
+    name: "Humidity"
+    id: humidity_rh
+    unit_of_measurement: "%"
+    device_class: humidity
+    state_class: measurement
+    accuracy_decimals: 1
+    update_interval: never
+
+  # Live countdown of the runtime timer (in MINUTES).
+  # 0 = no timer running (fan is either off, or running indefinitely).
+  # Updated once per second by fan_controller; published as whole minutes.
+  # `update_interval: never` because fan_controller drives publishes directly.
+  - platform: template
+    name: "Runtime Remaining"
+    id: runtime_remaining
+    unit_of_measurement: "min"
+    icon: mdi:timer-sand
+    accuracy_decimals: 0
+    state_class: measurement
+    update_interval: never
+
+  # Number of speed taps wired via DIP switch. 0 = invalid/unconfigured.
+  # Published once at boot (on_boot lambda); never changes at runtime.
+  - platform: template
+    name: "Speeds Available"
+    id: speeds_available
+    icon: mdi:dip-switch
+    accuracy_decimals: 0
+    state_class: measurement
+    entity_category: diagnostic
+    update_interval: never
+
+  # OEM BLE pairing diagnostic — how many devices are registered.
+  # Published by oem_ble_compat on setup + after each pair/clear.
+  # state_class required for HA to respect accuracy_decimals: 0.
+  - platform: template
+    name: "BLE Paired Devices"
+    id: ble_pair_count
+    icon: mdi:bluetooth-connect
+    accuracy_decimals: 0
+    state_class: measurement
+    entity_category: diagnostic
+    update_interval: never
+
+# --- DIP-switch read (GPIO 13/14/21, pulled up, encodes wiring scheme).
+# Kept `internal: true` — exposed only through the speeds_available sensor. ---
+binary_sensor:
+  # --- Improv-BLE advertising status, polled by the
+  # `interval:` block at the top of this file every 2s. Mostly useful as
+  # a HA dashboard indicator + automation trigger ("if advertising > 4min,
+  # notify me"). The actual advertising IS observable via BLE scan; this
+  # just makes it visible to non-BLE clients (HA, dashboards).
+  - platform: template
+    name: "Improv-BLE Advertising"
+    id: improv_active_bs
+    icon: mdi:bluetooth-transfer
+    entity_category: diagnostic
+
+  - platform: template
+    name: "Watchdog Tripped"
+    id: watchdog_tripped_bs
+    icon: mdi:shield-alert
+    entity_category: diagnostic
+
+  - platform: gpio
+    pin:
+      number: 13
+      mode:
+        input: true
+        pullup: true
+    id: dip_a
+    internal: true
+  # NOTE: The OEM firmware reads the DIP bits in the order GPIO13, GPIO21,
+  # GPIO14 — so dip_b is GPIO21 and dip_c is GPIO14 to keep the (a, b, c)
+  # tuple matching the OEM DIP encoding. Do not "tidy" this back to
+  # numerical order.
+  - platform: gpio
+    pin:
+      number: 21
+      mode:
+        input: true
+        pullup: true
+    id: dip_b
+    internal: true
+  - platform: gpio
+    pin:
+      number: 14
+      mode:
+        input: true
+        pullup: true
+    id: dip_c
+    internal: true
+
+  - platform: gpio
+    pin:
+      number: 27
+      mode:
+        input: true
+        pullup: true
+      inverted: true
+    id: key1_button
+    name: "KEY1 (Speed-Test)"
+    # Hidden from HA + web_server — physical hardware reflection only. The
+    # on_press/on_release lambdas still fire; the resulting actions (speed
+    # cycle, factory reset, OEM restore) are exposed as their own entities.
+    internal: true
+    filters:
+      - delayed_on: 30ms
+    # Track press start in fan_controller, dispatch on release
+    # based on held duration:
+    #   < 3s   short press  -> OEM speed cycle
+    #   3-5s   warning zone -> aborted, no action
+    #   >= 5s  commit       -> FACTORY RESET (wipe NVS + reboot into Improv-BLE)
+    # Dual-button check (BOTH KEY1+KEY2 held simultaneously) supersedes the
+    # single-button logic:
+    #   < 10s  dual press   -> aborted, no single-button action either
+    #   >= 10s dual commit  -> STOCK FIRMWARE RESTORE (V4.1 via http_request)
+    on_press:
+      then:
+        - lambda: 'id(attic_fan).on_key1_pressed();'
+    on_release:
+      then:
+        - lambda: |-
+            const uint32_t held = id(attic_fan).end_key1_press();
+            if (id(attic_fan).dispatch_pending_dual_gesture()) return;
+            const uint32_t WARNING = qc::LedStateMachineLogic::WARNING_MS;
+            const uint32_t COMMIT  = qc::LedStateMachineLogic::COMMIT_MS;
+            if (held >= COMMIT) {
+              ESP_LOGW("gesture", "KEY1 %ums held: FACTORY RESET", held);
+              id(factory_reset).press();
+            } else if (held > 0 && held < WARNING) {
+              id(attic_fan).on_key1_press();
+            }
+            // 3-5s = aborted warning; do nothing (user changed their mind).
+            // held==0 also = suppressed (dual gesture absorbed this release).
+
+  - platform: gpio
+    pin:
+      number: 26
+      mode:
+        input: true
+        pullup: true
+      inverted: true
+    id: key2_button
+    name: "KEY2 (Pair)"
+    # Hidden from HA + web_server — physical hardware reflection only. The
+    # on_press/on_release lambdas still fire; the resulting actions (Improv
+    # toggle, safe-mode, OEM restore) are exposed as their own entities.
+    internal: true
+    filters:
+      - delayed_on: 30ms
+    # KEY2 gesture mapping (matches OEM: KEY2 = Pair button):
+    #   < 3s   short press  -> if OEM BLE off: re-enable Smart Control + enter
+    #                          pair mode (physical recovery); else toggle pair mode
+    #   3-5s   medium hold  -> start Improv-BLE (stops OEM BLE to free adv space)
+    #   >= 5s  long hold    -> reboot into ESPHome SAFE MODE
+    # Dual-button check identical to KEY1's lambda.
+    on_press:
+      then:
+        - lambda: 'id(attic_fan).on_key2_pressed();'
+    on_release:
+      then:
+        - lambda: |-
+            const uint32_t held = id(attic_fan).end_key2_press();
+            if (id(attic_fan).dispatch_pending_dual_gesture()) return;
+            const uint32_t WARNING = qc::LedStateMachineLogic::WARNING_MS;
+            const uint32_t COMMIT  = qc::LedStateMachineLogic::COMMIT_MS;
+            if (held >= COMMIT) {
+              ESP_LOGW("gesture", "KEY2 %ums held: entering SAFE MODE", held);
+              id(safe_mode_button).press();
+            } else if (held >= WARNING && held < COMMIT) {
+              // 3-5s hold: start Improv-BLE. oem_ble_compat auto-suspends its
+              // own advertising while Improv is up (31-byte limit can't fit
+              // both UUIDs + name) and resumes when Improv stops — no need to
+              // touch the Smart Control switch here. 5min idle auto-stop arms.
+              ESP_LOGI("gesture", "KEY2 %ums held: starting Improv-BLE", held);
+              id(improv_component).start();
+              id(improv_auto_stop).execute();
+            } else if (held > 0 && held < WARNING) {
+              // Context-aware short-press (KEY2 = Pair). Pair mode is inert
+              // while the BLE service is down, so when OEM BLE is OFF the
+              // short press is repurposed as the only physical way back:
+              // re-enable Smart Control and enter pair mode (LED4 SlowBlink
+              // confirms it blind — no Wi-Fi/HA needed). When OEM BLE is ON,
+              // keep OEM parity: toggle pair mode.
+              if (!id(oem_ble_enabled).state) {
+                ESP_LOGW("gesture", "KEY2 short press (%ums): OEM BLE off — re-enabling Smart Control + entering pair mode", held);
+                id(oem_ble_enabled).publish_state(true);
+                id(ble_pair_mode).publish_state(true);
+              } else if (id(ble_pair_mode).state) {
+                ESP_LOGI("gesture", "KEY2 short press (%ums): exiting pair mode", held);
+                id(ble_pair_mode).publish_state(false);
+              } else {
+                ESP_LOGI("gesture", "KEY2 short press (%ums): entering pair mode", held);
+                id(ble_pair_mode).publish_state(true);
+              }
+            }
+            // held==0 = suppressed (dual gesture absorbed this release).
+
+# --- Diagnostic buttons: reboot + safe-mode recovery.
+# `Restart` is the everyday "I changed the DIP, refresh HA's view" button.
+# `Safe Mode` boots the firmware with only Wi-Fi + OTA loaded — useful if
+# a firmware update starts crashing in a loop; user can push a fixed
+# firmware from HA without UART access.
+button:
+  - platform: restart
+    name: "Restart"
+    icon: mdi:restart
+    entity_category: diagnostic
+  # `id` lets the KEY2 long-hold gesture press this instead of hand-rolling
+  # the set_safe_mode_pending + reboot sequence (the platform's press_action
+  # already does exactly that).
+  - platform: safe_mode
+    id: safe_mode_button
+    name: "Safe Mode"
+    icon: mdi:shield-refresh
+    entity_category: diagnostic
+  - platform: template
+    name: "Reset Watchdog"
+    icon: mdi:shield-refresh-outline
+    entity_category: diagnostic
+    on_press:
+      - lambda: 'id(attic_fan).reset_watchdog();'
+
+  # Factory reset — wipe the ESPHome NVS namespace and reboot. With Wi-Fi
+  # creds gone, Improv-BLE auto-advertises on next boot for re-onboarding.
+  # Owns its full reboot sequence (matching `Restore Stock Firmware` below)
+  # so the KEY1 long-hold gesture just presses it. `delay` lets the WARN
+  # line flush + the NVS erase settle before the reboot.
+  - platform: template
+    id: factory_reset
+    name: "Factory Reset"
+    icon: mdi:restore-alert
+    entity_category: diagnostic
+    on_press:
+      then:
+        - logger.log:
+            level: WARN
+            format: "FACTORY RESET: wiping ESPHome NVS + rebooting (Improv-BLE advertises on next boot)"
+        - delay: 100ms
+        - lambda: |-
+            global_preferences->reset();
+            App.safe_reboot();
+
+  # --- OEM BLE pairing management. "Clear BLE Pairings" wipes all
+  # stored pair-ids — existing clients must re-pair. ---
+  - platform: template
+    name: "Clear BLE Pairings"
+    icon: mdi:bluetooth-off
+    entity_category: diagnostic
+    on_press:
+      - lambda: 'id(oem_ble).clear_pairings();'
+
+  # Stock-firmware restore. Pulls the byte-perfect OEM V4.1 bin from
+  # QuietCool's CDN, writes it to the INACTIVE OTA slot via esp_ota_*, and
+  # reboots into it. The running slot cannot be overwritten (ESP-IDF
+  # guarantees this) so the previous ESPHome firmware survives in the other
+  # slot for one-OTA rollback if needed.
+  #
+  # The MD5 below is of the stock V4.1 image exactly as served at the
+  # myquietcool.com URL in the flash action.
+  #
+  # Triggerable three ways:
+  #   1. HA: press this button entity from any dashboard / automation.
+  #   2. Physical: hold BOTH KEY1 + KEY2 simultaneously for 10s (see the
+  #      KEY1/KEY2 on_release lambdas — they call .press() on this button
+  #      when DualGestureTracker reports >=10s dual-hold on release).
+  #   3. Web Installer: the Improv-BLE flow could surface this
+  #      via the existing api action.
+  #
+  # `entity_category: config` puts this in the Configuration panel of the HA
+  # device page (not the main dashboard) so it's discoverable but not
+  # accidentally pressable from a glance card.
+  - platform: template
+    id: restore_stock_firmware
+    name: "Restore Stock Firmware"
+    icon: mdi:backup-restore
+    entity_category: diagnostic
+    on_press:
+      then:
+        - logger.log:
+            level: WARN
+            format: "STOCK RESTORE: wiping ESPHome NVS + pulling V4.1 OEM firmware from myquietcool.com"
+        - lambda: |-
+            // Erase the ESPHome preferences namespace so stock firmware gets
+            // a clean NVS — this firmware's preference entries (~3 KB) would
+            // otherwise persist as dead weight on the tight 16 KB partition.
+            global_preferences->reset();
+        - ota.http_request.flash:
+            md5: "36d2e90dcfdd553272fc4eebdc3c4444"
+            url: http://myquietcool.com/profile/upload/2025/11/18/IT-BLT-ATTICFAN_V4.1_20251118010357A008.bin
+
+text_sensor:
+  - platform: template
+    name: "Fan Speed"
+    id: fan_speed
+    icon: mdi:fan-chevron-up
+    update_interval: never
+
+  - platform: template
+    name: "Smart Mode"
+    id: smart_mode_status
+    icon: mdi:brain
+    update_interval: never
+
+  # OTA partition diagnostics — useful for confirming which slot is running
+  # and which is the next OTA target before triggering "Restore Stock
+  # Firmware" (or any OTA, really). The running partition cannot be
+  # overwritten — ESP-IDF guarantees the new image lands in the inactive
+  # slot. After successful boot of the new image, the next-target slot
+  # holds the previous firmware as a rollback. Both values are fixed for
+  # the boot lifetime; published once from on_boot above.
+  - platform: template
+    name: "OTA: active partition"
+    id: ota_active_partition
+    icon: mdi:chip
+    entity_category: diagnostic
+    update_interval: never
+  - platform: template
+    name: "OTA: target partition"
+    id: ota_target_partition
+    icon: mdi:chip
+    entity_category: diagnostic
+    update_interval: never
+
+  - platform: wifi_info
+    mac_address:
+      name: "MAC (Wi-Fi)"
+      icon: mdi:wifi
+      entity_category: diagnostic
+
+  - platform: template
+    name: "MAC (BLE)"
+    id: ble_mac
+    icon: mdi:bluetooth
+    entity_category: diagnostic
+    update_interval: never
+
+# --- Relays (one-hot speed selector; mechanical, plain gpio_set_level in OEM).
+# Owned by fan_controller — exposed as outputs (not switches) so HA
+# users only see the fan entity, never the individual relays. ---
+output:
+  - platform: gpio
+    pin:
+      number: 5
+      ignore_strapping_warning: true
+    id: relay_low
+  - platform: gpio
+    pin: 22
+    id: relay_med
+  - platform: gpio
+    pin: 23
+    id: relay_high
+
+  # --- LEDs as BinaryOutputs, owned by the led_state_machine
+  # component (which drives them at 10 Hz based on fan + connectivity +
+  # button-hold state). Active-LOW on this hardware -> inverted: true.
+  # Don't drive these from anywhere else; the LED state machine assumes
+  # exclusive ownership. ---
+  - platform: gpio
+    pin: { number: 25, inverted: true }
+    id: led2_mode
+  - platform: gpio
+    pin: { number: 33, inverted: true }
+    id: led3_speed
+  - platform: gpio
+    pin: { number: 32, inverted: true }
+    id: led4_pair
+
+switch:
+  # --- Runtime gate for the louver-pop-open feature. Defaults OFF for OEM
+  # parity (the stock BLE controller has no pop-open). Persists across
+  # reboots so the user only enables it once. ---
+  - platform: template
+    id: louver_pop_open_enabled
+    name: "Louver Pop-Open"
+    icon: mdi:window-shutter-cog
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    entity_category: config
+
+  # --- Dry-run mode: when ON, the fan_controller still computes plans,
+  # honors DIP guards, fires deferred louver-pop-open transitions, and
+  # publishes state to HA exactly as if the fan were running — but the
+  # relay GPIO writes are suppressed. Useful for safely iterating firmware
+  # while the fan is physically wired in the attic.
+  # Defaults OFF (relays live) so safety is the default; persists across
+  # reboots so iteration sessions don't need to re-enable every flash. ---
+  # Dry Run is a developer/testing toggle, not a persistent user setting —
+  # default OFF on every boot is the safe behavior and avoids one extra
+  # NVS write per change (the NVS partition is only 16 KB on this OEM
+  # hardware — wear minimization matters).
+  - platform: template
+    id: dry_run_enabled
+    name: "Dry Run Mode"
+    icon: mdi:test-tube
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    entity_category: diagnostic
+
+  # --- Reboot-resume opt-in.
+  # When ON, the fan_controller persists its last speed + wall-clock timer
+  # endpoint to NVS on every state change. On boot, after HA time syncs, the
+  # fan resumes its last speed and (if a timer was running) re-arms it with
+  # the remaining time. Useful for night-cooling: a brief power outage at
+  # 2 AM no longer leaves you sweating until you find the dashboard.
+  # Defaults OFF for OEM-parity safety (and so flipping ON later is a
+  # deliberate, discoverable choice). on_turn_*` triggers force an
+  # immediate NVS save so the new mode takes effect without waiting for the
+  # next speed/timer change. ---
+  - platform: template
+    id: restore_last_state_enabled
+    name: "Resume on Boot"
+    icon: mdi:restore-alert
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    entity_category: config
+    on_turn_on:
+      - lambda: 'id(attic_fan).on_restore_switch_changed();'
+    on_turn_off:
+      - lambda: 'id(attic_fan).on_restore_switch_changed();'
+
+  # --- Smart Mode threshold enable/disable switches. Each gates its
+  # corresponding threshold in the decision tree. When OFF, that tier is
+  # skipped (equivalent to the OEM app's "OFF" wheel position / 255 sentinel).
+  # Defaults ON. The OEM app toggles these automatically when activating
+  # presets (Winter disables T High + T Med; Summer disables H Low). ---
+  - platform: template
+    id: smart_temp_high_enabled
+    name: "Smart: T High Enabled"
+    icon: mdi:thermometer-chevron-up
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    entity_category: config
+    on_turn_on:
+      - lambda: 'id(oem_ble).on_threshold_changed();'
+    on_turn_off:
+      - lambda: 'id(oem_ble).on_threshold_changed();'
+
+  - platform: template
+    id: smart_temp_med_enabled
+    name: "Smart: T Med Enabled"
+    icon: mdi:thermometer
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    entity_category: config
+    on_turn_on:
+      - lambda: 'id(oem_ble).on_threshold_changed();'
+    on_turn_off:
+      - lambda: 'id(oem_ble).on_threshold_changed();'
+
+  - platform: template
+    id: smart_temp_low_enabled
+    name: "Smart: T Low Enabled"
+    icon: mdi:thermometer-chevron-down
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    entity_category: config
+    on_turn_on:
+      - lambda: 'id(oem_ble).on_threshold_changed();'
+    on_turn_off:
+      - lambda: 'id(oem_ble).on_threshold_changed();'
+
+  - platform: template
+    id: smart_hum_high_enabled
+    name: "Smart: H High Enabled"
+    icon: mdi:water-alert
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    entity_category: config
+    on_turn_on:
+      - lambda: 'id(oem_ble).on_threshold_changed();'
+    on_turn_off:
+      - lambda: 'id(oem_ble).on_threshold_changed();'
+
+  - platform: template
+    id: smart_hum_low_enabled
+    name: "Smart: H Low Enabled"
+    icon: mdi:water-outline
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    entity_category: config
+    on_turn_on:
+      - lambda: 'id(oem_ble).on_threshold_changed();'
+    on_turn_off:
+      - lambda: 'id(oem_ble).on_threshold_changed();'
+
+  # --- OEM BLE compatibility: allows the stock QuietCool Android app to
+  # discover, pair with, and control this firmware over BLE. Ships ON by
+  # default (OEM expectations out of the box). Toggle OFF from HA if you
+  # don't need it — saves BLE radio time + a few KB of RAM. This switch is
+  # pure user-intent: oem_ble_compat additionally yields the advertising
+  # packet to Improv-BLE while it's active, without flipping this switch. ---
+  - platform: template
+    id: oem_ble_enabled
+    name: "Smart Control (BLE)"
+    icon: mdi:bluetooth-connect
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    entity_category: config
+
+  # Pair mode toggle — auto-turns OFF on timeout (120s) or successful pair.
+  - platform: template
+    id: ble_pair_mode
+    name: "BLE Pair Mode"
+    icon: mdi:bluetooth-connect
+    optimistic: true
+    restore_mode: ALWAYS_OFF
+    entity_category: diagnostic
+    on_turn_on:
+      - lambda: 'id(oem_ble).enter_pair_mode();'
+    on_turn_off:
+      - lambda: 'id(oem_ble).exit_pair_mode();'
+
+# --- Fan info entities: editable from HA, synced with OEM BLE app.
+# Model dropdown mirrors the OEM app's fan-model tile list.
+# Name auto-updates when model changes (OEM app behavior); independently
+# editable for custom names. Serial max 25 chars per OEM app validation. ---
+text:
+  - platform: template
+    name: "Fan Name"
+    id: fan_name
+    icon: mdi:rename
+    entity_category: config
+    optimistic: true
+    min_length: 0
+    max_length: 32
+    mode: text
+    on_value:
+      - lambda: 'id(oem_ble).set_fan_name(x);'
+
+  - platform: template
+    name: "Fan Serial Number"
+    id: fan_serial
+    icon: mdi:barcode
+    entity_category: config
+    optimistic: true
+    min_length: 0
+    max_length: 25
+    mode: text
+    on_value:
+      - lambda: 'id(oem_ble).set_fan_serial(x);'
+
+# --- fan_controller custom component owns the relays + DIP guards.
+# See components/fan_controller/. Logic class unit-tested host-side via
+# components/fan_controller/test/run_tests.bat.
+fan:
+  - platform: fan_controller
+    id: attic_fan
+    name: "Attic Fan"
+    low_relay: relay_low
+    med_relay: relay_med
+    high_relay: relay_high
+    # Direct DIP-bit references — read at boot to decide how many
+    # speed steps + which preset_modes to expose. Physical DIP changes
+    # require a reboot to refresh the HA entity (ESPHome traits are
+    # locked at API-announce time).
+    dip_a: dip_a
+    dip_b: dip_b
+    dip_c: dip_c
+    # Louver-pop-open feature: brief HIGH pulse on Off->Low|Med transitions
+    # to assist mechanical louvers opening via air pressure. Defaults OFF
+    # for OEM parity; gated by the `Louver Pop-Open` switch above.
+    louver_pop_open_seconds: 5
+    louver_pop_open_switch: louver_pop_open_enabled
+    # Dry-run gate: when the `Dry Run Mode` switch above is ON, relay GPIO
+    # writes are suppressed (everything else — DIP guards, plans, HA state
+    # publishing — still runs). For safe attic-install debugging.
+    dry_run_switch: dry_run_enabled
+    # Countdown timer plumbing.
+    # `runtime_remaining_sensor` gets the live remaining-seconds value once
+    # per second while the timer is active, and 0 when idle. `max_run_minutes`
+    # caps how far a single extend_runtime() call can push the endpoint —
+    # 1440 (24h) matches the OEM internal max.
+    runtime_remaining_sensor: runtime_remaining
+    max_run_minutes: 1440
+    # Reboot-resume policy, gated by an HA-toggleable switch.
+    # When the `Restore Last State on Boot` switch is ON, the fan_controller
+    # persists last speed + wall-clock timer endpoint to NVS and resumes
+    # after a controller reboot. When OFF (default), behavior matches OEM
+    # cold-boot (everything starts off). HA-side reboots are unaffected —
+    # firmware keeps running through them regardless of this setting.
+    # `time_id` enables the timer-restore path via wall-clock arithmetic;
+    # without it, only the speed is resumed (active timer is cancelled).
+    restore_mode_switch: restore_last_state_enabled
+    time_id: wall_clock
+    # Auto-arm default countdown on fan.turn_on from off. References the
+    # `Default Run Time` number below — user-editable from HA device
+    # settings, persists across reboots, set to 0 to disable.
+    default_run_minutes_number: default_run_time
+    # Smart Mode — sensor + threshold wiring. The decision tree runs every
+    # 10s (see the interval: block above) while Smart Mode is active.
+    temp_sensor: sht30_temp_c
+    humidity_sensor: sht30_humidity
+    smart_temp_high: smart_temp_high
+    smart_temp_med: smart_temp_med
+    smart_temp_low: smart_temp_low
+    smart_hum_high: smart_hum_high
+    smart_hum_low: smart_hum_low
+    smart_temp_high_switch: smart_temp_high_enabled
+    smart_temp_med_switch: smart_temp_med_enabled
+    smart_temp_low_switch: smart_temp_low_enabled
+    smart_hum_high_switch: smart_hum_high_enabled
+    smart_hum_low_switch: smart_hum_low_enabled
+    mode_select: fan_mode
+    smart_hum_response: smart_hum_response
+    smart_mode_status: smart_mode_status
+    fan_speed_sensor: fan_speed
+    watchdog_sensor: watchdog_tripped_bs
+    speeds_available_sensor: speeds_available
+    # Pressed by dispatch_pending_dual_gesture() when both keys commit
+    # past 10s — the canonical KEY1+KEY2 long-hold action.
+    stock_restore_button: restore_stock_firmware
+
+# --- HA-editable default-runtime number. User sees this in
+# Settings -> Devices -> QuietCool Attic Fan -> Configuration as
+# "Default Run Time" with a 0-1440 minute slider/input.
+# 180 (3h) ships as the initial value to match OEM-app turn-on behavior.
+# Set to 0 to disable auto-arm — fan.turn_on then runs indefinitely until
+# extend_runtime is called or fan.turn_off. `restore_value: true` makes
+# the user's choice survive reboots; `entity_category: config` puts it in
+# the device-settings panel rather than the dashboard. ---
+number:
+  - platform: template
+    name: "Run Time"
+    id: default_run_time
+    icon: mdi:timer-cog
+    entity_category: config
+    optimistic: true
+    restore_value: true
+    initial_value: 180
+    min_value: 0
+    max_value: 1440
+    step: 5
+    unit_of_measurement: "min"
+    mode: box
+    on_value:
+      - lambda: 'id(oem_ble).mark_hx_dirty();'
+
+  # --- Temperature offset (°C) — applied to the SHT30's native °C reading
+  # BEFORE the °C→°F conversion, so it propagates to any future °C consumer
+  # and so HA can auto-convert the displayed unit to match user preference
+  # (HA uses `device_class: temperature` to handle metric/imperial users).
+  # Defaults to 0.0 (no correction) so out-of-the-box behavior matches the
+  # OEM. Typical attic-mounted readings run 3-8 °C high due to enclosure
+  # self-heating; setting this to -3.0 °C (-5.4 °F) nulls that.
+  # `restore_value` persists the choice across reboots. ---
+  - platform: template
+    name: "Cal: T"
+    id: temp_offset_c
+    icon: mdi:thermometer-plus
+    entity_category: config
+    device_class: temperature
+    optimistic: true
+    restore_value: true
+    initial_value: 0.0
+    min_value: -10.0
+    max_value: 10.0
+    step: 0.1
+    unit_of_measurement: "°C"
+    mode: box
+
+  # --- Humidity offset (%RH) — added to the raw SHT30 humidity reading.
+  # The Humidity template sensor clamps the result to [0, 100] so an
+  # over-aggressive offset can't produce nonsensical values. Defaults to
+  # 0.0; SHT30 humidity spec is ±2 %RH but drift can be larger in dusty
+  # or long-deployed sensors. ---
+  - platform: template
+    name: "Cal: H"
+    id: humidity_offset_rh
+    icon: mdi:water-percent
+    entity_category: config
+    device_class: humidity
+    optimistic: true
+    restore_value: true
+    initial_value: 0.0
+    min_value: -20.0
+    max_value: 20.0
+    step: 0.1
+    unit_of_measurement: "%"
+    mode: box
+
+  # --- Smart Mode thresholds. Defaults match OEM factory values (100/90/80 °F
+  # converted to °C). HA auto-converts display to the user's preferred unit
+  # via device_class: temperature. No restore_value — the active preset is
+  # applied at boot (deferred apply_preset_) and is the source of truth. ---
+  - platform: template
+    name: "Smart: T High"
+    id: smart_temp_high
+    icon: mdi:thermometer-chevron-up
+    entity_category: config
+    device_class: temperature
+    optimistic: true
+    initial_value: 37.8
+    min_value: -10.0
+    max_value: 80.0
+    step: 0.1
+    unit_of_measurement: "°C"
+    mode: box
+    on_value:
+      - lambda: 'id(oem_ble).on_threshold_changed();'
+  - platform: template
+    name: "Smart: T Med"
+    id: smart_temp_med
+    icon: mdi:thermometer
+    entity_category: config
+    device_class: temperature
+    optimistic: true
+    initial_value: 32.2
+    min_value: -10.0
+    max_value: 80.0
+    step: 0.1
+    unit_of_measurement: "°C"
+    mode: box
+    on_value:
+      - lambda: 'id(oem_ble).on_threshold_changed();'
+  - platform: template
+    name: "Smart: T Low"
+    id: smart_temp_low
+    icon: mdi:thermometer-chevron-down
+    entity_category: config
+    device_class: temperature
+    optimistic: true
+    initial_value: 26.7
+    min_value: -10.0
+    max_value: 80.0
+    step: 0.1
+    unit_of_measurement: "°C"
+    mode: box
+    on_value:
+      - lambda: 'id(oem_ble).on_threshold_changed();'
+  - platform: template
+    name: "Smart: H High"
+    id: smart_hum_high
+    icon: mdi:water-alert
+    entity_category: config
+    device_class: humidity
+    optimistic: true
+    initial_value: 90.0
+    min_value: 0.0
+    max_value: 100.0
+    step: 1.0
+    unit_of_measurement: "%"
+    mode: box
+    on_value:
+      - lambda: 'id(oem_ble).on_threshold_changed();'
+  - platform: template
+    name: "Smart: H Low"
+    id: smart_hum_low
+    icon: mdi:water-outline
+    entity_category: config
+    device_class: humidity
+    optimistic: true
+    initial_value: 70.0
+    min_value: 0.0
+    max_value: 100.0
+    step: 1.0
+    unit_of_measurement: "%"
+    mode: box
+    on_value:
+      - lambda: 'id(oem_ble).on_threshold_changed();'
+
+select:
+  - platform: template
+    name: "Fan Mode"
+    id: fan_mode
+    icon: mdi:fan-clock
+    entity_category: config
+    optimistic: true
+    restore_value: true
+    initial_option: "Timer"
+    options:
+      - "Timer"
+      - "Run"
+      - "Smart"
+    on_value:
+      - lambda: 'id(oem_ble).mark_hx_dirty();'
+
+  - platform: template
+    name: "Smart Preset"
+    id: smart_preset
+    icon: mdi:bookmark-outline
+    entity_category: config
+    optimistic: true
+    initial_option: "Summer"
+    options:
+      - "Summer"
+    # Options rebuilt dynamically at boot from stored preset names.
+    # HA sees updated options on reconnect; web_server picks them up immediately.
+    # Threshold changes auto-save back to the active preset.
+
+  - platform: template
+    name: "Smart: H Response"
+    id: smart_hum_response
+    icon: mdi:fan-auto
+    entity_category: config
+    optimistic: true
+    initial_option: "Low"
+    options:
+      - "Off"
+      - "Low"
+      - "Medium"
+      - "High"
+    on_value:
+      - lambda: 'id(oem_ble).on_threshold_changed();'
+
+  # Fan model dropdown — display names match the OEM app's model list.
+  # Index "0"-"7" stored in NVS; display name shown in HA and OEM app.
+  - platform: template
+    name: "Fan Model"
+    id: fan_model
+    icon: mdi:fan
+    entity_category: config
+    optimistic: true
+    restore_value: true
+    initial_option: "Generic"
+    options:
+      - "Generic"
+      - "AFG SMT PRO-2.0"
+      - "AFG SMT PRO-3.0"
+      - "AFG SMT ES-3.0"
+      - "AFR SMT ES-2.0(1st Generation)"
+      - "AFR SMT PRO-1.3"
+      - "AFR SMT PRO-2.0"
+      - "AFR SMT ES-2.0(2nd Generation)"
+    on_value:
+      - lambda: 'id(oem_ble).set_fan_model_by_display(x);'
+
+# --- LED state machine. Owns LED2/3/4 (active-LOW outputs). At
+# 10 Hz, polls fan state, Wi-Fi/API status, and button-hold durations and
+# drives the three GPIOs into the per-LED pattern. See
+# components/led_state_machine/led_state_machine_logic.h for the decision
+# matrix (unit-tested host-side). ---
+led_state_machine:
+  led2: led2_mode
+  led3: led3_speed
+  led4: led4_pair
+  fan_controller_id: attic_fan
+  # When Improv-BLE is advertising, LED4 goes 10 Hz
+  # (distinct from the 5 Hz "Wi-Fi down" and 1 Hz "HA down" patterns) so
+  # the user can tell at a glance that the device is currently provisionable.
+  improv_id: improv_component
+  pair_mode_switch: ble_pair_mode
+
+# ====================================================================
+# HTTP client + stock-firmware restore. The http_request component is a
+# dependency of `ota.platform: http_request` (added in creds-*.yaml) —
+# without it the OTA platform won't compile. `timeout` is the per-chunk
+# read timeout during the flash; 30s is well above the ~5s the 1.17 MB
+# bin actually takes over local Wi-Fi.
+# ====================================================================
+http_request:
+  timeout: 30s
+  verify_ssl: false  # OEM endpoint serves over http://, no TLS cert in flash
+
+# ====================================================================
+# Built-in web UI for users who don't run Home Assistant. v3 is the
+# modern web_server (ESPHome 2024.10+) — entity-aware REST endpoints,
+# Server-Sent Events for live state, mobile-friendly UI. `local: true`
+# serves the JS/CSS bundle from device flash (~80 KB) instead of jsDelivr
+# CDN, so an offline LAN still works. No auth: matches the dist build's
+# overall LAN-trust model (api/ota are also passwordless until the HA
+# adoption flow pushes per-device secrets). To lock it down, add
+# `auth: { username, password }` in creds-dev.yaml.
+# ====================================================================
+web_server:
+  version: 3
+  local: true
+
+# ====================================================================
+# POST /api/flash_url?url=<url>&md5=<32hex> — flashes arbitrary firmware
+# on top of this ESPHome firmware. Used by the Web Installer to push stock
+# OEM bins or alternative custom builds without HA. Input validation
+# lives in components/http_flash_handler/http_flash_logic.h (27 host
+# tests covering scheme + MD5 length/charset + whitespace).
+# `ota_id: http_ota` references the `id:` attached to ota.http_request
+# in creds-{dev,dist}.yaml — the handler calls set_url/set_md5/flash()
+# on that component, which handles the actual OTA + reboot.
+# ====================================================================
+http_flash_handler:
+  ota_id: http_ota
+
+# ====================================================================
+# OEM BLE compatibility — reimplements the stock QuietCool V2 BLE
+# protocol (single GATT service 000000ff-..., single characteristic
+# 0000ff01-..., 22 JSON commands + pair-state machine). The stock
+# Android app discovers this as "ATTICFAN_<mac>" and works normally.
+# Toggleable at runtime via the "Smart Control (BLE)" switch above.
+# ====================================================================
+oem_ble_compat:
+  id: oem_ble
+  fan_controller_id: attic_fan
+  enable_switch: oem_ble_enabled
+  # Lets the component suspend its own advertising while Improv-BLE is up
+  # (advertising-packet contention) and resume when Improv goes idle — no
+  # YAML-side state machine needed.
+  improv_id: improv_component
+  pair_mode_timeout: 120
+  max_pair_ids: 50
+  # ota.http_request engine the A=10 Upgrade handler drives to flash custom
+  # firmware from a BLE-supplied URL (non-OEM domains only; OEM URLs no-op).
+  ota_id: http_ota
+  temp_sensor: sht30_temp_c
+  humidity_sensor: sht30_humidity
+  smart_temp_high: smart_temp_high
+  smart_temp_med: smart_temp_med
+  smart_temp_low: smart_temp_low
+  smart_hum_high: smart_hum_high
+  smart_hum_low: smart_hum_low
+  smart_hum_response: smart_hum_response
+  runtime_remaining_sensor: runtime_remaining
+  default_run_minutes_number: default_run_time
+  smart_mode_status: smart_mode_status
+  pair_count_sensor: ble_pair_count
+  pair_mode_switch: ble_pair_mode
+  fan_name_text: fan_name
+  fan_model_select: fan_model
+  fan_serial_text: fan_serial
+  ble_mac_sensor: ble_mac
+  preset_select: smart_preset
+

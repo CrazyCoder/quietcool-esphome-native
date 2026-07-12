@@ -1,0 +1,11 @@
+# Name,Type,SubType,Offset,Size,Flags
+# OEM-compatible partition layout — mirrors the stock IT-AF-SMT flash map.
+# Preserves NVS at 0x9000 so OEM Wi-Fi creds carry over via oem_nvs_reader.
+# Preserves dual-OTA (ota_0@0x20000, ota_1@0x200000, 1.875 MB each) so the
+# OEM Android app's HTTP-OTA mechanism remains a viable rollback path.
+nvs,data,nvs,0x9000,0x4000,
+otadata,data,ota,0xd000,0x2000,
+phy_init,data,phy,0xf000,0x1000,
+coredump,data,coredump,0x10000,0x10000,
+ota_0,app,ota_0,0x20000,0x1e0000,
+ota_1,app,ota_1,0x200000,0x1e0000,

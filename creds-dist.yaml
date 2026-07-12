@@ -1,0 +1,23 @@
+# Distribution-build credentials package — adds no api.encryption.key and
+# no ota password. Devices shipped from this build come up with:
+#   - api:  unencrypted on first contact (HA discovers via mDNS)
+#   - ota:  password-less (anyone on LAN can OTA, but only until adoption)
+#
+# This is the canonical ESPHome distribution pattern (Apollo Automation,
+# KAUF, Athom). After the user runs the "Adopt" flow from the ESPHome
+# dashboard in HA, a per-user encryption key + OTA password are generated
+# and pushed via OTA — replacing these no-op defaults with real secrets.
+#
+# Selected at build time:
+#   esphome -s build_mode dist compile quietcool-atticfan.yaml
+
+# An OTA block IS required (you can't `ota: []`), but it can be
+# password-less. Adoption pushes a fresh ota: stanza with a generated password.
+ota:
+  - platform: esphome
+  # http_request OTA — enables the stock-restore action wired in the main YAML.
+  # ESPHome packages append list entries during merge, so this coexists with the
+  # esphome OTA above. `id:` lets the http_flash_handler external component
+  # (POST /api/flash_url) drive this OTA programmatically with any URL.
+  - platform: http_request
+    id: http_ota

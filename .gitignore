@@ -1,0 +1,18 @@
+# Gitignore settings for ESPHome
+# This is an example and may include too much for your use-case.
+# You can modify this file to suit your needs.
+/.esphome/
+/secrets.yaml
+
+# Host-side unit-test build artifacts
+*.exe
+__pycache__/
+*.pyc
+
+# Local NVS partition dump for the optional group-keys fixture check
+# (may contain your Wi-Fi credentials / BLE pair-ids — never commit it)
+components/oem_nvs_reader/test/nvs-fixture.bin
+
+# Built firmware image. A `dev` build embeds Wi-Fi creds + API key, so never
+# commit it; hosting for the Web installer should use a `dist` build instead.
+firmware.ota.bin
