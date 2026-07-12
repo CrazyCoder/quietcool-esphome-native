@@ -8,7 +8,11 @@ Open-source ESPHome firmware for the **QuietCool IT-AF-SMT Smart Attic Fan Contr
 
 > ## ▶ Install it now — nothing to build
 >
+> <a href="https://crazycoder.github.io/quietcool-esphome-native/"><img src="docs/images/web-installer-qr.png" align="right" width="150" alt="QR code — scan with a phone to open the Web Installer" /></a>
+>
 > **[Open the Web Installer → crazycoder.github.io/quietcool-esphome-native](https://crazycoder.github.io/quietcool-esphome-native/)** from any Bluetooth-equipped computer or phone within radio range of the powered hub — Chrome or Edge on Windows, macOS, Linux, or Android, or Bluefy on iOS. It flashes the ready-to-run, credential-free firmware over the hub's own BLE OTA in about two minutes — no compiling, no downloads, no UART, nothing to host yourself. Step-by-step below: [Installing the firmware](#installing-the-firmware).
+>
+> Installing from a phone? **Scan the QR code** instead of typing the URL.
 
 > **A distribute-anywhere firmware bundle.** The credential-free `dist` build (`esphome -s build_mode dist compile quietcool-atticfan.yaml`) ships with no Wi-Fi creds, no API encryption key, and no OTA password baked in: at boot, `oem_nvs_reader` imports Wi-Fi creds from the OEM-stored NVS partition (so anyone whose hub was previously connected via the QuietCool app joins their network within ~5 s), then the ESPHome dashboard's **Adopt** flow generates per-device api/ota secrets and OTA-pushes them.
 
