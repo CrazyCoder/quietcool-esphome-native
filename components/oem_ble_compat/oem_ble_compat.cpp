@@ -828,10 +828,7 @@ std::string OemBleCompat::handle_get_parameter_() {
 // stops nagging. Bump this to match QuietCool's newest published version whenever
 // they release one. Our firmware is feature-equivalent regardless of this string.
 std::string OemBleCompat::handle_get_version_() {
-  char buf[160];
-  snprintf(buf, sizeof(buf),
-           R"({"A":3,"V":"IT-BLT-ATTICFAN_V4.3","P":100,"D":"2026.04.30","M":"online","H":"A"})");
-  return buf;
+  return ::qc::get_version_response();
 }
 
 // A=4 GetRouter

@@ -306,6 +306,29 @@ another phone. It cannot bootstrap the first pairing (see [§3](#3-authenticatio
 `V` = software version, `P` = over-temp protection cutoff (°F), `D` = build date,
 `M` = build/create mode, `H` = MCU/hardware version.
 
+#### V4.1 versus V4.3
+
+As of 2026-07-12, QuietCool's update service advertises V4.3 on its QC and
+engineering channels while the production channel remains V4.1. We compared the
+complete OEM V4.1 and V4.3 ESP32 application images before choosing the
+compatibility version reported by this firmware.
+
+V4.3 is 256 bytes larger (64 bytes of DROM and 192 bytes of IROM). A
+relocation-aware segment diff found no new or removed string, constant, global
+initializer, NVS key, BLE command, or protocol behavior. A separate Diaphora
+function-level comparison matched 2,081 functions at ratio 1.0 and found zero
+high-confidence functions with changed logic. Even the embedded application compile
+timestamp is identical in both images (`Oct 15 2025 15:48:41`). The remaining byte
+differences are consistent with rebuild hashes, address relocations, pointer-table
+updates, and branch-displacement churn; no isolable semantic firmware change was
+found. The Android app itself has one `>= 4.2` check that changes OTA progress-bar
+rendering, but that is cosmetic app behavior rather than a hub capability.
+
+Accordingly, this compatibility implementation answers `GetVersion` with
+`IT-BLT-ATTICFAN_V4.3` and date `2026.04.30`. This is deliberately an OEM
+compatibility claim, separate from the ESPHome project's own release version: it
+prevents the Smart Control app from repeatedly offering replacement OEM firmware.
+
 ### 5.6 GetRouter (A=4)
 
 ```jsonc

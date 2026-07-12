@@ -279,6 +279,15 @@ inline std::vector<uint8_t> qq_wrap(const std::string &json) {
   return out;
 }
 
+// A=3 GetVersion compatibility response. This is the newest OEM version whose
+// behavior we have compared against, not this project's own release version.
+// Reporting it prevents the Smart Control app from offering an OEM update that
+// would replace this firmware. Keep the exact response host-tested so a future
+// cloud-version bump is an intentional compatibility change.
+inline const char *get_version_response() {
+  return R"({"A":3,"V":"IT-BLT-ATTICFAN_V4.3","P":100,"D":"2026.04.30","M":"online","H":"A"})";
+}
+
 // ── Fan model catalogue (from APK CommConstants + MyUtils.getDeviceModel) ──
 
 struct FanModelEntry {
