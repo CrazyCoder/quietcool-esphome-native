@@ -132,31 +132,32 @@ The installer is a static site — host it anywhere that serves it over HTTPS. G
 Pages is the simplest option: its certificate is trusted by ESP-IDF's CA bundle, so
 the hub's own HTTPS download of the firmware bin works too.
 
-1. **Build the credential-free firmware** from this repo:
+**Automated (recommended).** A ready-to-use workflow at
+[`.github/workflows/deploy-pages.yml`](../.github/workflows/deploy-pages.yml) builds
+the credential-free (`dist`) firmware, stages `firmware.ota.bin` + an `.md5` next to
+`index.html`, and deploys this folder to Pages. To activate it — Pages needs a
+**public repo** (or a paid plan):
 
-   ```sh
-   esphome -s build_mode dist compile quietcool-atticfan.yaml
-   ```
+1. **Settings → Pages → Build and deployment → Source: "GitHub Actions".**
+2. Uncomment the `push:` trigger in the workflow so every push to `main` redeploys
+   (or run it manually from the Actions tab any time).
 
-2. **Copy the built image next to `index.html`:**
+**Manual (any host).** Or build and stage the files yourself:
 
-   ```sh
-   cp .esphome/build/quietcool-atticfan/.pioenvs/quietcool-atticfan/firmware.ota.bin \
-      <installer-dir>/firmware.ota.bin
-   ```
+```sh
+esphome -s build_mode dist compile quietcool-atticfan.yaml
+cp .esphome/build/quietcool-atticfan/.pioenvs/quietcool-atticfan/firmware.ota.bin \
+   web-installer/firmware.ota.bin
+```
 
-3. **Publish the installer directory to Pages** — either point the repo's Pages
-   settings at the installer folder, or use a GitHub Actions job that uploads the
-   installer directory (with `firmware.ota.bin`) as the Pages artifact.
+then serve the `web-installer/` folder from any static host with a public-CA HTTPS
+cert (Cloudflare Pages, Netlify, or your own server).
 
 The page auto-detects its firmware URL as `./firmware.ota.bin` relative to wherever
 it's served, so no code change is needed. Keep the final URL short — the OEM
 `Upgrade` buffer truncates past 100 characters, so a path like
 `https://<user>.github.io/<repo>/firmware.ota.bin` is fine, but deeply nested paths
 are not.
-
-Any other static host with a public-CA HTTPS cert (Cloudflare Pages, Netlify, or
-your own server) works the same way.
 
 ## Caveats / risks
 

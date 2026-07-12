@@ -1,0 +1,85 @@
+# Build the credential-free (dist) firmware and publish it together with the
+# Web BLE installer to GitHub Pages.
+#
+# ── One-time setup (do this once the repo is PUBLIC) ──────────────────────────
+#   GitHub Pages requires a public repo (or a paid plan for private Pages).
+#   1. Settings → Pages → Build and deployment → Source: "GitHub Actions".
+#   2. Uncomment the `push:` trigger below so every push to main redeploys.
+#
+# Until then this workflow only runs when you start it manually from the Actions
+# tab ("Run workflow"), so it never leaves failed runs on a private repo.
+# ──────────────────────────────────────────────────────────────────────────────
+name: Deploy Web installer
+
+on:
+  workflow_dispatch:
+  # push:
+  #   branches: [main]
+
+# Least privilege + what the Pages deploy needs.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never run two Pages deploys at once; a newer push supersedes an in-flight one.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Cache the ESP-IDF / PlatformIO toolchain (large, and stable for a pinned
+      # ESPHome version). We deliberately do NOT cache .esphome/: its generated
+      # C++ can go stale across config changes, and `esphome clean` does not clear
+      # it — a from-scratch build guarantees the artifact matches the source.
+      - name: Cache PlatformIO toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            ~/.cache/pip
+          key: pio-${{ runner.os }}-esphome-2026.6.5
+          restore-keys: pio-${{ runner.os }}-
+
+      # Pinned for reproducible firmware artifacts. Bump this (and the cache key
+      # above) in lockstep with the version you build/test with locally.
+      - name: Install ESPHome
+        run: pip install esphome==2026.6.5
+
+      # `dist` swaps the dev credential packages for the secret-free ones, so this
+      # build needs no secrets.yaml and bakes in no Wi-Fi creds / API key.
+      - name: Build dist firmware
+        run: esphome -s build_mode dist compile quietcool-atticfan.yaml
+
+      - name: Stage firmware + checksum next to the installer
+        run: |
+          BIN=.esphome/build/quietcool-atticfan/.pioenvs/quietcool-atticfan/firmware.ota.bin
+          test -f "$BIN" || { echo "::error::firmware.ota.bin not found at $BIN"; exit 1; }
+          cp "$BIN" web-installer/firmware.ota.bin
+          md5sum "$BIN" | awk '{print $1}' > web-installer/firmware.ota.bin.md5
+          echo "Staged firmware ($(du -h "$BIN" | cut -f1)), md5 $(cat web-installer/firmware.ota.bin.md5)"
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: web-installer
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4
