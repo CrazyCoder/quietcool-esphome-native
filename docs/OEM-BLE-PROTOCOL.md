@@ -754,6 +754,11 @@ Where it **deliberately diverges** from stock:
 - **The two binary commands are stubs.** `GetRecordData` (A=28) returns an empty
   "no data" record and `SynchronizeTime` (A=29) acks without keeping a clock — ESPHome
   users get history from Home Assistant's recorder and the time from SNTP.
+- **No `ManualSendState` push.** Stock emits an unsolicited `{"A":12,"R":"<speed>"}` on a
+  physical KEY1 speed change so a connected OEM app updates instantly; this firmware
+  doesn't. Since the app polls `GetWorkState` (~10 s) and that push is just the speed (a
+  strict subset of `GetWorkState`), the app still reflects a local speed change within one
+  poll — so it's a latency nicety, not a parity requirement.
 
 The component ships with host-side unit tests covering gate checks, field mapping, frame
 assembly, the fan-model catalogue, URL classification, and input validation — see
