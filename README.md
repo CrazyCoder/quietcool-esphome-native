@@ -30,6 +30,30 @@ Switching costs nothing: Wi-Fi credentials, Smart Mode thresholds, presets, and 
 
 ---
 
+## Alternatives & prior art
+
+If replacing the firmware isn't for you, several projects control the fan by speaking the stock firmware's BLE protocol from the outside. Credit where due — the protocol reverse-engineering lineage starts with `emerose/quietcool`, which most of the others build on.
+
+| Project | Approach | What you need | Feature surface & constraints |
+|---|---|---|---|
+| [rwarner/ha-quietcool-ble](https://github.com/rwarner/ha-quietcool-ble) | HA custom integration (HACS) speaking BLE to the stock hub | Bluetooth adapter on the HA host, or an ESPHome Bluetooth Proxy in range | Fan speeds, Idle/Timer/TH mode select, temp/humidity, TH thresholds. Polls every 10 s over a link the hub drops after ~25 s idle; unencrypted BLE; pairing with the phone app evicts HA's credential (one client at a time); can read but not set the timer duration. Actively maintained. |
+| [awkaplan/quietcool-esphome](https://github.com/awkaplan/quietcool-esphome) | Separate ESP32 running ESPHome as a BLE→HA bridge | A second, dedicated ESP32 placed in BLE range of the hub | On/off + 2 speeds, timer hour/minute entities, temp/humidity. No Smart (TH) mode control; ~15 s poll with a ~25 s full refresh cycle; the bridge holds the hub's single BLE connection, so the phone app has to be "forgotten". |
+| [snyamathi/quietcool](https://github.com/snyamathi/quietcool) | Python BLE CLI + Homebridge shim (HomeKit, not HA) — fork of `emerose/quietcool` adding V2 (V4.x firmware) protocol support | BLE-capable host (e.g. a Raspberry Pi) near the fan | On/off, low/high; reads temp/humidity/presets. No Smart or Timer mode control; each BLE connection costs ~3–4 s, so HomeKit is served from a cache refreshed every 10 min. |
+| [emerose/quietcool](https://github.com/emerose/quietcool) | The original Python BLE library/CLI (PyPI) — the reverse-engineering root | BLE-capable host near the fan | CLI reads status and pairs; most setters are unimplemented or untested. Dormant since early 2025. |
+
+All of these keep the stock firmware — that's their strength (nothing to reflash) and their ceiling: each one is a **BLE client of a hub designed for one phone at a time**, so they inherit the radio's range limit, connect-per-command latency, polling instead of push, the unencrypted link, and pairing fights with the phone app.
+
+Running *on* the hub removes that entire class of problems:
+
+- **No BLE in the control path.** HA talks to the hub over Wi-Fi with ESPHome's encrypted, push-based native API — state changes appear instantly, from anywhere on the network, with no radio-range constraint and no polling loop.
+- **No extra hardware.** No second ESP32, no Bluetooth proxy, no Pi near the attic — the hub itself is the smart device.
+- **No pairing conflicts.** The stock app keeps its BLE channel while HA uses Wi-Fi — simultaneously, not either/or.
+- **The whole feature surface, not a client subset.** Delta and absolute timers, preset CRUD synced with the app, Smart Mode with per-rule toggles and sensor calibration, resume-on-boot, louver assist, web UI + REST — the logic runs where the relays are, so none of it depends on keeping a BLE session alive.
+
+The honest trade-off: this project reflashes the hub. That's a bigger first step than installing a HACS integration — mitigated by the browser-based installer (no disassembly, ~2 minutes over the OEM's own BLE OTA) and [four escalating paths back to stock](#going-back-to-stock).
+
+---
+
 ## What you get in Home Assistant
 
 After flashing and pairing, the device exposes the entities below. The fan, sensors, and timer service are the daily-use stuff; the rest are configuration / diagnostic.
