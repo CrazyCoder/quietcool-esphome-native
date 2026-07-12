@@ -370,8 +370,8 @@ async function runFlashFlow() {
     if (pairId.length > 100) { alert("Pair ID too long (max 100)"); return; }
   }
   if (!ssid) { alert("Wi-Fi SSID required — the hub uses it to download the firmware"); return; }
-  if (ssid.length > 64) { alert("SSID too long (max 64)"); return; }
-  if (pwd.length > 32) { alert("Password too long (max 32)"); return; }
+  if (ssid.length > 32) { alert("SSID too long (max 32 — the hub's SSID buffer)"); return; }
+  if (pwd.length > 63) { alert("Password too long (max 63)"); return; }
   if (!url || !/^https?:\/\//.test(url)) { alert("URL must start with http:// or https://"); return; }
   if (url.length > 100) { alert("URL too long (max 100 chars per OEM buffer)"); return; }
 

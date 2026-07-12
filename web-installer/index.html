@@ -142,7 +142,7 @@
           <ol class="step-list" style="margin: 6px 0 0 0">
             <li>Find the <strong>Pair</strong> button (KEY2) on the hub. It's the same button used during initial setup.</li>
             <li>Press and hold it for <strong>3 or more seconds</strong>, then release. LED4 (the pair LED) will change to indicate the hub is pairable.</li>
-            <li>Come back here and click <em>Connect via Bluetooth</em> below — quickly, the window is short.</li>
+            <li>Come back here and press the <strong>Connect &amp; flash</strong> button in step 6 below — quickly, the window is short.</li>
           </ol>
         </div>
 
@@ -151,11 +151,11 @@
             <li>On a phone with the <strong>QuietCool Smart Control</strong> app (Android/iOS only — it needn't be the device running this installer), tap your hub, then tap <strong>Pair Mode</strong>.</li>
             <li>Wait until the app confirms pair mode is active.</li>
             <li><strong>Force-close the OEM app</strong> (swipe it away in the recents view). The hub only allows one BLE central at a time — leaving the app open will block this page from connecting.</li>
-            <li>Come back here and click <em>Connect via Bluetooth</em> below.</li>
+            <li>Come back here and press the <strong>Connect &amp; flash</strong> button in step 6 below.</li>
           </ol>
         </div>
 
-        <p class="muted">When you hit Flash, this wizard will register a fresh random pair-id with the hub and save it in this browser so you can retry without re-running pair mode if anything goes wrong.</p>
+        <p class="muted">When you press <strong>Connect &amp; flash</strong>, this wizard will register a fresh random pair-id with the hub and save it in this browser so you can retry without re-running pair mode if anything goes wrong.</p>
       </div>
     </div>
   </div>
@@ -163,9 +163,9 @@
   <div class="card" id="card-settings">
     <h2>4. Wi-Fi for the hub</h2>
     <p class="muted">The hub will join this network after we connect, then download the new firmware. Fill these in <strong>before</strong> hitting the button below — once Bluetooth connects, the pair-mode window starts ticking and you want to move fast.</p>
-    <label for="ssid">Wi-Fi SSID (max 64 chars)</label>
+    <label for="ssid">Wi-Fi SSID (max 32 chars)</label>
     <input id="ssid" type="text" placeholder="MyNetwork" autocomplete="off" autocapitalize="off" spellcheck="false">
-    <label for="pwd">Wi-Fi password (max 32 chars)</label>
+    <label for="pwd">Wi-Fi password (max 63 chars)</label>
     <input id="pwd" type="password" placeholder="••••••••" autocomplete="off" autocapitalize="off" spellcheck="false">
 
     <h2 style="margin-top:18px">5. Firmware URL</h2>
@@ -184,7 +184,7 @@
 
   <div class="card" id="card-pairid-saved" style="display:none">
     <h2>⚠️ Save this Pair ID</h2>
-    <p>Generated and registered with the hub. <strong>Copy it now</strong> — if the flash fails, paste it into the <em>I have a pair-id</em> field above to retry without going through the OEM app's Pair Mode again. Also auto-saved to this browser's local storage.</p>
+    <p>Generated and registered with the hub. <strong>Copy it now</strong> — if the flash fails, paste it into the <strong>Pair ID</strong> field above to retry without going through the OEM app's Pair Mode again. Also auto-saved to this browser's local storage.</p>
     <div class="row" style="margin-top:10px">
       <input id="generated-pairid" type="text" readonly onclick="this.select()" style="flex:1; font-family:ui-monospace,Menlo,Consolas,monospace; font-size:14px">
       <button id="btn-copy-pairid" class="secondary" style="flex:0 0 auto; width:auto; padding:12px 16px">Copy</button>
@@ -232,14 +232,13 @@
 
     <details>
       <summary>How does this work? / troubleshooting</summary>
-      <p class="muted">The button issues a single <code>POST http://&lt;host&gt;/api/flash_url?url=…&amp;md5=…</code> to the device. The device's <code>http_flash_handler</code> component validates the URL+MD5, returns <code>202 Accepted</code> immediately, then ~500 ms later kicks off the <code>ota.http_request</code> OTA — pulls the bin, writes it to the inactive OTA slot, reboots. The currently-running firmware can never be overwritten (ESP-IDF guarantees this), so the previous bin stays in the other slot for one-OTA rollback if needed.</p>
+      <p class="muted">The button issues a single <code>POST http://&lt;host&gt;/api/flash_url?url=…&amp;md5=…</code> to the device. The device's <code>http_flash_handler</code> component validates the URL+MD5, returns <code>200 OK</code> (body “Accepted…”) immediately, then ~500 ms later kicks off the <code>ota.http_request</code> OTA — pulls the bin, writes it to the inactive OTA slot, reboots. The currently-running firmware can never be overwritten (ESP-IDF guarantees this), so the previous bin stays in the other slot for one-OTA rollback if needed.</p>
       <p class="muted"><strong>No auth on this endpoint</strong> — matches the device's LAN-trust default (api/ota are also passwordless before Home Assistant adoption pushes per-device secrets). To lock it down, add <code>auth: { username, password }</code> under <code>web_server:</code> in your build.</p>
       <p class="muted"><strong>Common failure modes:</strong></p>
       <ul class="step-list muted">
         <li>"Network error" → device hostname doesn't resolve; try the LAN IP instead. The full mDNS name is required, including the MAC suffix (e.g. <code>quietcool-atticfan-abcdef.local</code>, not just <code>quietcool-atticfan</code>).</li>
         <li>"404 Not Found" → device firmware doesn't have <code>web_server</code> + <code>http_flash_handler</code> wired. Re-flash with a current build that includes them.</li>
-        <li>"400 Missing or empty 'url'" → URL field is empty.</li>
-        <li>"400 MD5 must be exactly 32 hex characters" → trim it; the field accepts both cases but exactly 32 chars are required.</li>
+        <li><strong>500</strong> with a validation message (e.g. "Missing or empty 'url' parameter", "MD5 must be exactly 32 hex characters") → the device rejected the request; the reason is in the response body. ESPHome's IDF web backend surfaces the handler's validation errors as 500. The form pre-checks the URL and MD5, so you'll normally see the reason inline before anything is sent.</li>
         <li>POST succeeds but device doesn't come back → check the device's UART/logger output. The OTA may have failed mid-flash; ESP-IDF rollback will boot the previous firmware on next reset. Just power-cycle.</li>
       </ul>
     </details>
@@ -249,7 +248,7 @@
     <h2>Caveats</h2>
     <ul class="step-list muted">
       <li>The OEM firmware does <strong>not</strong> verify signatures on OTA images — anything reachable at the firmware URL gets flashed. Only point this at images you trust.</li>
-      <li>If the hub has been paired with the OEM Android app, the factory test pair ID stops working — use the <em>Pair as new device</em> path instead.</li>
+      <li>If the hub has been paired with the OEM Android app, the factory test pair ID stops working — use the <em>put it into pair mode</em> option instead.</li>
       <li>Wi-Fi password is transmitted in cleartext over BLE (an OEM trait, not ours). Acceptable for a one-shot bootstrap; BLE range is ~10 m.</li>
       <li>If the host serving the firmware uses HTTPS, the hub trusts standard public CAs. If your cert isn't trusted, fall back to plain <code>http://</code>.</li>
     </ul>
@@ -259,6 +258,6 @@
     Source &amp; design: <a style="color:var(--accent)" href="https://github.com/CrazyCoder/quietcool-esphome-native">quietcool-esphome-native</a> · OEM device QuietCool IT-AF-SMT
   </p>
 </main>
-<script src="./app.js?v=1"></script>
+<script src="./app.js?v=2"></script>
 </body>
 </html>
