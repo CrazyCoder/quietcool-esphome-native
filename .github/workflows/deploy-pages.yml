@@ -5,6 +5,9 @@
 # Actions", and a public repo — private Pages needs a paid plan).
 name: Deploy Web installer
 
+env:
+  ESPHOME_VERSION: "2026.6.5"
+
 on:
   workflow_dispatch:
   push:
@@ -59,14 +62,14 @@ jobs:
           path: |
             ~/.platformio
             ~/.cache/pip
-          key: pio-${{ runner.os }}-esphome-2026.6.5
+          key: pio-${{ runner.os }}-esphome-${{ env.ESPHOME_VERSION }}
           restore-keys: pio-${{ runner.os }}-
 
       # Pinned for reproducible firmware artifacts. Bump this (and the cache key
       # above) in lockstep with the version you build/test with locally.
       - name: Install ESPHome
         if: steps.fw-cache.outputs.cache-hit != 'true'
-        run: pip install esphome==2026.6.5
+        run: pip install "esphome==${ESPHOME_VERSION}"
 
       # `dist` swaps the dev credential packages for the secret-free ones, so this
       # build needs no secrets.yaml and bakes in no Wi-Fi creds / API key.
@@ -88,6 +91,27 @@ jobs:
         with:
           path: web-installer
 
+      - name: Prepare firmware release artifact
+        env:
+          FIRMWARE_INPUT_HASH: ${{ hashFiles('quietcool-atticfan.yaml', 'wifi-dist.yaml', 'creds-dist.yaml', 'partitions.csv', 'components/**', '!components/**/test/**') }}
+        shell: bash
+        run: |
+          mkdir release-artifact
+          cp web-installer/firmware.ota.bin release-artifact/
+          cp web-installer/firmware.ota.bin.md5 release-artifact/
+          printf '%s:%s\n' "$ESPHOME_VERSION" "$FIRMWARE_INPUT_HASH" \
+            > release-artifact/firmware.build-fingerprint
+
+      # Preserve the exact dist image outside the Pages tarball so the release
+      # job can compare and archive it after the live installer is deployed.
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-firmware
+          path: release-artifact
+          if-no-files-found: error
+          retention-days: 7
+
   deploy:
     needs: build
     runs-on: ubuntu-latest
@@ -98,3 +122,124 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deploy
         uses: actions/deploy-pages@v4
+
+  release:
+    needs: [build, deploy]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Download firmware artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-firmware
+          path: dist
+
+      # A cache miss does not necessarily mean new firmware: cache eviction and
+      # workflow-only edits can rebuild from the same inputs, while build-time
+      # metadata can make those bytes differ. Compare both the input fingerprint
+      # and the image with the latest firmware release to avoid duplicates.
+      - name: Check for a new firmware image
+        id: firmware
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          bin="dist/firmware.ota.bin"
+          current_sha="$(sha256sum "$bin" | awk '{print $1}')"
+          current_fingerprint="$(tr -d '[:space:]' < dist/firmware.build-fingerprint)"
+          expected_md5="$(tr -d '[:space:]' < dist/firmware.ota.bin.md5)"
+          actual_md5="$(md5sum "$bin" | awk '{print $1}')"
+          if [[ "$actual_md5" != "$expected_md5" ]]; then
+            echo "::error::Staged firmware MD5 does not match its checksum file"
+            exit 1
+          fi
+
+          latest_tag="$(
+            gh release list --limit 100 --exclude-drafts --exclude-pre-releases \
+              --json tagName \
+              --jq '[.[] | select(.tagName | startswith("qc-esphome-"))] | first | .tagName // ""'
+          )"
+          changed=true
+
+          if [[ -n "$latest_tag" ]]; then
+            mkdir previous
+            if gh release download "$latest_tag" \
+                --pattern 'qc-esphome-*' --dir previous; then
+              previous_bin="$(find previous -maxdepth 1 -type f -name 'qc-esphome-*.bin' -print -quit)"
+              previous_fingerprint_file="$(find previous -maxdepth 1 -type f -name 'qc-esphome-*.build-fingerprint' -print -quit)"
+              previous_fingerprint=""
+              if [[ -n "$previous_fingerprint_file" ]]; then
+                previous_fingerprint="$(tr -d '[:space:]' < "$previous_fingerprint_file")"
+              fi
+
+              if [[ -n "$previous_fingerprint" ]] && \
+                  [[ "$previous_fingerprint" == "$current_fingerprint" ]]; then
+                changed=false
+              elif [[ -n "$previous_bin" ]] && \
+                  [[ "$(sha256sum "$previous_bin" | awk '{print $1}')" == "$current_sha" ]]; then
+                changed=false
+              fi
+            else
+              echo "::warning::Latest firmware release has no matching binary; publishing this build"
+            fi
+          fi
+
+          short_sha="${GITHUB_SHA::7}"
+          stem="qc-esphome-${ESPHOME_VERSION}-${short_sha}"
+          echo "changed=$changed" >> "$GITHUB_OUTPUT"
+          echo "latest_tag=$latest_tag" >> "$GITHUB_OUTPUT"
+          echo "stem=$stem" >> "$GITHUB_OUTPUT"
+          echo "sha256=$current_sha" >> "$GITHUB_OUTPUT"
+
+          if [[ "$changed" == "false" ]]; then
+            echo "Firmware inputs or image match $latest_tag; no release needed." | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Prepare release assets
+        if: steps.firmware.outputs.changed == 'true'
+        env:
+          STEM: ${{ steps.firmware.outputs.stem }}
+          SHA256: ${{ steps.firmware.outputs.sha256 }}
+        shell: bash
+        run: |
+          cp dist/firmware.ota.bin "$STEM.bin"
+          cp dist/firmware.ota.bin.md5 "$STEM.bin.md5"
+          printf '%s\n' "$SHA256" > "$STEM.bin.sha256"
+          cp dist/firmware.build-fingerprint "$STEM.build-fingerprint"
+
+      - name: Publish firmware release
+        if: steps.firmware.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STEM: ${{ steps.firmware.outputs.stem }}
+          PREVIOUS_TAG: ${{ steps.firmware.outputs.latest_tag }}
+          SHA256: ${{ steps.firmware.outputs.sha256 }}
+        shell: bash
+        run: |
+          args=(
+            "$STEM"
+            "$STEM.bin"
+            "$STEM.bin.md5"
+            "$STEM.bin.sha256"
+            "$STEM.build-fingerprint"
+            --target "$GITHUB_SHA"
+            --title "$STEM"
+            --generate-notes
+            --latest
+          )
+          if [[ -n "$PREVIOUS_TAG" ]]; then
+            args+=(--notes-start-tag "$PREVIOUS_TAG")
+          fi
+
+          gh release create "${args[@]}"
+          release_url="$(gh release view "$STEM" --json url --jq .url)"
+          {
+            echo "Published [$STEM]($release_url)."
+            echo
+            echo "SHA-256: \`$SHA256\`"
+          } >> "$GITHUB_STEP_SUMMARY"

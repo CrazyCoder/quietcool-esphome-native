@@ -170,6 +170,16 @@ gh workflow run "Deploy Web installer"
 
 or use the **Actions → Deploy Web installer → Run workflow** button.
 
+After a successful Pages deployment, the workflow compares the credential-free build
+with the latest firmware release. If the firmware inputs changed and the image differs,
+it publishes a release and tag named
+`qc-esphome-<esphome-version>-<short-commit-hash>` with the matching `.bin`, `.md5`,
+`.sha256`, and build-fingerprint assets. GitHub-generated release notes compare the new
+commit with the previous firmware-release tag. Page-only changes, cache evictions, and
+other rebuilds from the same firmware inputs do not create a release. The live installer
+continues to use its short `./firmware.ota.bin` URL rather than a long GitHub Release
+asset URL.
+
 **Self-hosting elsewhere.** The installer is a static site — serve the `web-installer/`
 folder from any host with a public-CA HTTPS cert (Cloudflare Pages, Netlify, your own
 server). Build and stage the firmware next to `index.html` yourself:
