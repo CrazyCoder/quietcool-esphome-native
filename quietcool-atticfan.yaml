@@ -581,15 +581,13 @@ button:
       then:
         - logger.log:
             level: WARN
-            format: "STOCK RESTORE: wiping ESPHome NVS + pulling V4.1 OEM firmware from myquietcool.com"
+            format: "STOCK RESTORE: preserving OEM NVS + pulling V4.1 OEM firmware from myquietcool.com"
         - lambda: |-
-            // Erase the ESPHome preferences namespace so stock firmware gets
-            // a clean NVS — this firmware's preference entries (~3 KB) would
-            // otherwise persist as dead weight on the tight 16 KB partition.
-            global_preferences->reset();
-            // Arm the one-shot rollback-confirm: stock can't self-confirm, so
-            // mark its slot VALID at OTA_COMPLETED or app-rollback reverts us.
-            id(http_flasher).request_rollback_confirm();
+            // At OTA completion, mark the stock slot VALID; then, after the
+            // final ESPHome preference sync, erase only the `esphome` NVS
+            // namespace. Never erase the whole NVS partition: OEM pair IDs,
+            // presets, thresholds, fan metadata, and Wi-Fi live beside it.
+            id(http_flasher).request_stock_restore_finalize();
         - ota.http_request.flash:
             md5: "36d2e90dcfdd553272fc4eebdc3c4444"
             url: http://myquietcool.com/profile/upload/2025/11/18/IT-BLT-ATTICFAN_V4.1_20251118010357A008.bin
@@ -1222,4 +1220,3 @@ oem_ble_compat:
   fan_serial_text: fan_serial
   ble_mac_sensor: ble_mac
   preset_select: smart_preset
-

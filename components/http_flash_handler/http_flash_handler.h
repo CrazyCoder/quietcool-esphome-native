@@ -48,16 +48,30 @@ class HttpFlashHandler : public Component, public ota::OTAStateListener {
   // on boot and should keep the rollback safety net.
   void request_rollback_confirm() { confirm_after_flash_ = true; }
 
+  // Arm all finalization needed for a deliberate restore to stock firmware:
+  // confirm the foreign app slot and, immediately before reboot, erase only
+  // ESPHome's own NVS namespace. OEM namespaces (especially hx_list, which
+  // holds pair IDs, presets, thresholds, and fan metadata) must survive.
+  void request_stock_restore_finalize() {
+    confirm_after_flash_ = true;
+    erase_esphome_on_powerdown_ = true;
+  }
+
   // OTAStateListener. Fires synchronously from OtaHttpRequestComponent::flash()
   // (main-loop context) — on OTA_COMPLETED it runs just before App.safe_reboot(),
   // which is our window to rewrite otadata in time.
   void on_ota_state(ota::OTAState state, float progress, uint8_t error) override;
+  void on_powerdown() override;
 
  protected:
   http_request::OtaHttpRequestComponent *ota_ = nullptr;
   // One-shot flag set by request_rollback_confirm(); consumed/cleared in
   // on_ota_state(). Default false so ordinary OTAs keep app-rollback.
   bool confirm_after_flash_ = false;
+  // One-shot flag used only by request_stock_restore_finalize(). Erasing in
+  // on_powerdown() puts this after ESPHome's normal shutdown preference sync,
+  // so no pending preference writes can recreate the namespace before reboot.
+  bool erase_esphome_on_powerdown_ = false;
 };
 
 }  // namespace quietcool

@@ -583,7 +583,7 @@ The erased `Group_*` blobs are **not required** by the OEM firmware for normal o
 
 BLE pair-ids, Smart Mode thresholds, presets, and Wi-Fi credentials are untouched by the cleanup itself.
 
-**Flashing back to stock resets your BLE pairing, though.** Once this firmware has managed the hub, reverting to OEM firmware leaves the previous pair-ids no longer authenticating — `Login` returns `Fail`, so the OEM app (and any BLE client) can't reconnect until you **re-pair**: put the hub in pair mode with the KEY2 long-hold and pair again from the QuietCool app. (Other `hx_list` data such as Smart Mode thresholds and presets is not wiped by the OTA, but whether stock reads it back cleanly after this firmware has managed the namespace hasn't been verified — the pairing is the one thing you definitely have to redo.)
+**OEM settings are preserved when restoring stock.** The restore finalizer erases only the private `esphome` NVS namespace; it leaves the OEM `hx_list` namespace intact, including BLE pair IDs, Smart Mode thresholds, presets, timer defaults, and fan metadata. ESP-IDF application OTA itself writes only the inactive app slot and `otadata`; it does not erase NVS. Pairing persistence across this corrected restore path still needs a live hardware verification before release.
 
 ---
 

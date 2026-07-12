@@ -4,6 +4,7 @@
 #include "esphome/components/web_server_base/web_server_base.h"
 
 #include <esp_ota_ops.h>
+#include <nvs.h>
 
 namespace esphome {
 namespace quietcool {
@@ -104,9 +105,34 @@ void HttpFlashHandler::on_ota_state(ota::OTAState state, float progress, uint8_t
       // Flash failed → no reboot happens. Disarm so a later, unrelated OTA on
       // this component isn't wrongly stripped of its rollback protection.
       this->confirm_after_flash_ = false;
+      this->erase_esphome_on_powerdown_ = false;
       break;
     default:
       break;
+  }
+}
+
+void HttpFlashHandler::on_powerdown() {
+  if (!this->erase_esphome_on_powerdown_) return;
+  this->erase_esphome_on_powerdown_ = false;
+
+  // The stock and ESPHome applications share the OEM 16 KB NVS partition.
+  // Remove only ESPHome's private namespace; nvs_flash_erase() would destroy
+  // every OEM namespace, including hx_list pair IDs and user settings.
+  nvs_handle_t handle = 0;
+  esp_err_t err = nvs_open("esphome", NVS_READWRITE, &handle);
+  if (err == ESP_OK) {
+    err = nvs_erase_all(handle);
+    if (err == ESP_OK) err = nvs_commit(handle);
+    nvs_close(handle);
+  }
+
+  if (err == ESP_OK || err == ESP_ERR_NVS_NOT_FOUND) {
+    ESP_LOGW(TAG, "Erased ESPHome NVS namespace; preserved OEM pairings and settings");
+  } else {
+    // Failure here is non-fatal: leaving ESPHome keys as stock-ignored dead
+    // weight is safer than broadening the erase and losing OEM state.
+    ESP_LOGE(TAG, "Could not erase ESPHome NVS namespace (err=0x%X); OEM state preserved", err);
   }
 }
 
