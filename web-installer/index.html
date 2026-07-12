@@ -17,32 +17,47 @@
     --ok: #58cc6b;
     --warn: #ffb74a;
     --err: #ff6b6b;
-    --shadow: 0 1px 0 rgba(255,255,255,.04), 0 4px 12px rgba(0,0,0,.4);
+    --shadow: 0 0 0 1px rgba(255,255,255,.07), 0 1px 0 rgba(255,255,255,.04), 0 4px 12px rgba(0,0,0,.4);
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg);
-    font: 16px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    font: 16px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
   main { max-width: 600px; margin: 0 auto; padding: 16px env(safe-area-inset-right, 16px) 32px env(safe-area-inset-left, 16px); }
   h1 { font-size: 22px; margin: 8px 0 4px; }
   h2 { font-size: 16px; margin: 24px 0 8px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
   h3 { font-size: 15px; margin: 12px 0 4px; }
+  h1, h2, h3 { text-wrap: balance; }
   p { margin: 6px 0; }
-  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+  p, li { text-wrap: pretty; }
+  /* Concentric radius: inner surfaces are 8px and sit 16px inside the card,
+     so the card corner is 8 + 16 = 24px. */
+  .card { background: var(--card); border-radius: 24px;
     padding: 16px; margin-bottom: 16px; box-shadow: var(--shadow); }
   .card h2:first-child { margin-top: 0; }
   .mode-block { background: var(--card-highlight); border: 1px solid var(--border); border-radius: 8px;
-    padding: 12px; margin-top: 10px; }
+    padding: 12px; margin-top: 10px;
+    transition-property: border-color, background-color; transition-duration: .15s; }
   .mode-block.selected { border-color: var(--accent); }
   .mode-block label.head { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 15px; color: var(--fg); margin: 0; }
-  .mode-block .body { margin-top: 8px; padding-left: 24px; }
-  .mode-block.collapsed .body { display: none; }
+  .mode-block .body { margin-top: 8px; padding-left: 24px;
+    transition: opacity .25s cubic-bezier(.2,0,0,1), translate .25s cubic-bezier(.2,0,0,1),
+      display .25s allow-discrete; }
+  .mode-block.collapsed .body { display: none; opacity: 0; translate: 0 -4px; }
+  @starting-style {
+    .mode-block:not(.collapsed) .body { opacity: 0; translate: 0 -4px; }
+  }
   button { display: block; width: 100%; padding: 14px 16px; font-size: 16px;
     background: var(--accent); color: #001a26; border: none; border-radius: 10px;
-    cursor: pointer; font-weight: 600; touch-action: manipulation; }
-  button:active { background: var(--accent-pressed); }
+    cursor: pointer; font-weight: 600; touch-action: manipulation;
+    transition-property: scale, background-color; transition-duration: .15s; }
+  button:active:not(:disabled) { scale: 0.96; }
+  button:not(.secondary):not(.danger):active:not(:disabled) { background: var(--accent-pressed); }
   button:disabled { background: #3a4854; color: #6a7888; cursor: not-allowed; }
   button.secondary { background: transparent; color: var(--fg); border: 1px solid var(--border); }
+  button.secondary:active:not(:disabled) { background: rgba(255,255,255,.06); }
   button.danger { background: var(--err); color: #2c0000; }
+  button.danger:active:not(:disabled) { background: #e05252; }
   input[type="text"], input[type="password"], input[type="url"], input[type="number"], textarea {
     width: 100%; padding: 12px; font-size: 16px; background: #0c1418;
     color: var(--fg); border: 1px solid var(--border); border-radius: 8px;
@@ -69,7 +84,8 @@
   .log .ok { color: var(--ok); }
   .log .step { color: var(--accent); font-weight: 600; margin-top: 6px; }
   details { margin: 8px 0; }
-  summary { color: var(--accent); cursor: pointer; padding: 4px 0; font-size: 14px; }
+  summary { color: var(--accent); cursor: pointer; padding: 12px 0; font-size: 14px;
+    touch-action: manipulation; }
   .muted { color: var(--muted); font-size: 14px; }
   .err { color: var(--err); }
   .warn { color: var(--warn); }
@@ -80,6 +96,14 @@
   .step-list li { margin: 6px 0; }
   .progress { height: 4px; background: var(--border); border-radius: 2px; overflow: hidden; margin: 8px 0; }
   .progress > div { height: 100%; background: var(--accent); width: 0%; transition: width .3s ease; }
+  /* Live-updating counters/percentages: fixed-width digits, no layout shift. */
+  #progress-status, #connect-status, #esphome-flash-status, .log {
+    font-variant-numeric: tabular-nums; }
+  /* Cards revealed mid-flow (display:none at load) fade in on first render;
+     nothing animates on page load because these start hidden. */
+  @keyframes card-in { from { opacity: 0; translate: 0 8px; } }
+  #card-pairid-saved, #card-progress, #card-done {
+    animation: card-in .3s cubic-bezier(.2,0,0,1); }
   hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
   .callout { border-left: 3px solid var(--warn); background: rgba(255,183,74,.08);
     padding: 10px 12px; border-radius: 0 8px 8px 0; margin: 10px 0; font-size: 14px; }
