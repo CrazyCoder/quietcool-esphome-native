@@ -28,7 +28,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Reuse the previously-built firmware when nothing that feeds the dist
       # build has changed — site-only pushes then skip the whole ESP-IDF
@@ -39,14 +39,14 @@ jobs:
       # evicts the cache (~7 days unused), the next push just rebuilds once.
       - name: Restore built firmware
         id: fw-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             web-installer/firmware.ota.bin
             web-installer/firmware.ota.bin.md5
           key: fw-${{ hashFiles('quietcool-atticfan.yaml', 'wifi-dist.yaml', 'creds-dist.yaml', 'partitions.csv', 'components/**', '!components/**/test/**', '.github/workflows/deploy-pages.yml') }}
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         if: steps.fw-cache.outputs.cache-hit != 'true'
         with:
           python-version: "3.12"
@@ -57,7 +57,7 @@ jobs:
       # it — a from-scratch build guarantees the artifact matches the source.
       - name: Cache PlatformIO toolchain
         if: steps.fw-cache.outputs.cache-hit != 'true'
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.platformio
@@ -105,7 +105,7 @@ jobs:
       # Preserve the exact dist image outside the Pages tarball so the release
       # job can compare and archive it after the live installer is deployed.
       - name: Upload firmware artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dist-firmware
           path: release-artifact
@@ -132,7 +132,7 @@ jobs:
       GH_REPO: ${{ github.repository }}
     steps:
       - name: Download firmware artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: dist-firmware
           path: dist
