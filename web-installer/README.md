@@ -1,12 +1,21 @@
 # QuietCool Web Installer
 
+> **▶ Already hosted — flash without setting anything up:**
+> **<https://crazycoder.github.io/quietcool-esphome-native/>**
+>
+> Open that in a Web Bluetooth browser (Chrome or Edge on Windows/macOS/Linux/Android,
+> or Bluefy on iOS) on any computer or phone within Bluetooth range of the hub to flash
+> it over BLE — the credential-free firmware bin is served alongside it, so there's
+> nothing to build or host. The rest of this document covers self-hosting and the internals.
+
 A single-page wizard that flashes custom ESPHome firmware onto a QuietCool
 IT-AF-SMT hub — no UART, no attic crawl, no APK sideload. It has two independent
 paths, picked by where the hub is in its lifecycle:
 
 1. **Web BLE flow (sections 1–6 on the page).** Flashes the custom ESPHome
-   firmware onto a hub still running the stock OEM firmware. Open the page from a
-   phone (Chrome on Android, Bluefy on iOS) and walk the wizard. The same flow can
+   firmware onto a hub still running the stock OEM firmware. Open the page in a Web
+   Bluetooth browser — Chrome or Edge on a Windows/macOS/Linux/Android machine, or
+   Bluefy on iOS — within Bluetooth range of the hub and walk the wizard. The same flow can
    also re-install OEM `V4.1` on a stock-firmware hub. Once the ESPHome firmware is
    running this path no longer applies — the hub no longer speaks the OEM BLE
    protocol.
@@ -128,30 +137,33 @@ browsers may block the cross-protocol fetch. Workarounds:
 
 ## Deploying to GitHub Pages
 
-The installer is a static site — host it anywhere that serves it over HTTPS. GitHub
-Pages is the simplest option: its certificate is trusted by ESP-IDF's CA bundle, so
-the hub's own HTTPS download of the firmware bin works too.
+**This repository already publishes the installer to
+<https://crazycoder.github.io/quietcool-esphome-native/>.** Pages is enabled with
+source *GitHub Actions*, and the
+[`deploy-pages.yml`](../.github/workflows/deploy-pages.yml) workflow builds the
+credential-free (`dist`) firmware, stages `firmware.ota.bin` + an `.md5` next to
+`index.html`, and deploys this folder. GitHub Pages' certificate is trusted by
+ESP-IDF's CA bundle, so the hub's own HTTPS download of the firmware bin works too.
 
-**Automated (recommended).** A ready-to-use workflow at
-[`.github/workflows/deploy-pages.yml`](../.github/workflows/deploy-pages.yml) builds
-the credential-free (`dist`) firmware, stages `firmware.ota.bin` + an `.md5` next to
-`index.html`, and deploys this folder to Pages. To activate it — Pages needs a
-**public repo** (or a paid plan):
+**Redeploy after changing the firmware or the page.** The workflow runs on manual
+dispatch — rebuild and republish with:
 
-1. **Settings → Pages → Build and deployment → Source: "GitHub Actions".**
-2. Uncomment the `push:` trigger in the workflow so every push to `main` redeploys
-   (or run it manually from the Actions tab any time).
+```sh
+gh workflow run "Deploy Web installer"
+```
 
-**Manual (any host).** Or build and stage the files yourself:
+or the **Actions → Deploy Web installer → Run workflow** button. To make every push to
+`main` redeploy automatically, uncomment the `push:` trigger in the workflow.
+
+**Self-hosting elsewhere.** The installer is a static site — serve the `web-installer/`
+folder from any host with a public-CA HTTPS cert (Cloudflare Pages, Netlify, your own
+server). Build and stage the firmware next to `index.html` yourself:
 
 ```sh
 esphome -s build_mode dist compile quietcool-atticfan.yaml
 cp .esphome/build/quietcool-atticfan/.pioenvs/quietcool-atticfan/firmware.ota.bin \
    web-installer/firmware.ota.bin
 ```
-
-then serve the `web-installer/` folder from any static host with a public-CA HTTPS
-cert (Cloudflare Pages, Netlify, or your own server).
 
 The page auto-detects its firmware URL as `./firmware.ota.bin` relative to wherever
 it's served, so no code change is needed. Keep the final URL short — the OEM
