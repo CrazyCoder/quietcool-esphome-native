@@ -393,7 +393,7 @@ The firmware layers multiple independent recovery paths so a single failure mode
 | **Firmware boots but is otherwise misbehaving** (runaway control logic, HA unreachable, etc.) | KEY2 hold **≥ 5 s** → reboot into safe mode manually. Or press the **Safe Mode** button in HA. Same effect: Wi-Fi + OTA only, no custom components — flash a corrected build over OTA. |
 | **Lost BLE pairing**, or stock app says *"device memory full"* | `button.<device>_clear_ble_pairings` in HA wipes just the pair-id list. Or, more thorough: KEY1 hold **≥ 5 s** → factory reset (wipes the entire NVS, reboots into Improv). The factory reset also wipes Wi-Fi creds, so have Improv ready. |
 | **Need to roll back to stock OEM firmware** | See [Going back to stock](#going-back-to-stock) below — 4 escalating paths (HA button → dual-button gesture → Web Installer → UART). The first three all download the OEM bin from QuietCool's CDN over HTTP, so they each require working Wi-Fi; only the UART path works fully offline. |
-| **Need to push a fresh firmware image** | ESPHome OTA via the dashboard or `flash.bat`. From HA, the **Safe Mode** button is helpful if the current firmware is unstable. Worst case: UART reflash (BOOT pin held LOW, `esptool write-flash` to `0x20000` or `0x200000`) — always works. |
+| **Need to push a fresh firmware image** | Any OTA path in [Updating a running hub](#updating-a-hub-already-running-this-firmware) — `esphome run`, the dashboard, HTTP flash, or BLE. From HA, the **Safe Mode** button is helpful if the current firmware is unstable. Worst case: UART reflash (BOOT pin held LOW, `esptool write-flash` to `0x20000` or `0x200000`) — always works. |
 
 **Why the layering matters.** The 10× auto-safe-mode is a hard, no-touch backstop: even if every gesture is unreachable (e.g., the enclosure is sealed), a fixable crash-loop self-rescues into a flashable state. The captive portal AP works without a phone-paired prior history. Improv-BLE works without any prior Wi-Fi. The dual-button stock-restore is intentionally 10 s (vs 5 s for single-button gestures) so a one-handed grab can't trigger it. **UART is the universal offline backstop:** every other recovery path here either depends on the network (the three CDN-driven stock-restore paths, OTA pushes from HA / ESPHome / Web Installer) or on the firmware booting far enough to read GPIOs (every physical gesture). When all of those are unavailable, UART always works.
 
@@ -447,11 +447,14 @@ The web installer hosts a **credential-free distribution build** — no Wi-Fi pa
 
 If you don't run the ESPHome dashboard add-on, the device works fine unencrypted on a trusted LAN, or you can build your own image with your own keys via Path B.
 
-### Path B: build from source (developer)
+### Path B: build from source (developer, any OS)
+
+Works the same on Windows, macOS, and Linux. Install the ESPHome CLI first — `uv tool install esphome` (or `pip install esphome`); ESPHome 2026.5+ is required and enforced by `min_version` in the YAML.
 
 ```sh
-# from a clone of this repository
-cp secrets.yaml.example secrets.yaml         # edit with your Wi-Fi + API key + OTA password
+git clone https://github.com/CrazyCoder/quietcool-esphome-native.git
+cd quietcool-esphome-native
+cp secrets.yaml.example secrets.yaml         # `copy` on Windows cmd; edit with your Wi-Fi + API key + OTA password
 esphome compile quietcool-atticfan.yaml      # dev build — bakes all secrets in from secrets.yaml
 ```
 
@@ -464,17 +467,29 @@ esphome -s build_mode dist compile quietcool-atticfan.yaml
 # After Wi-Fi joins, the ESPHome dashboard's Adopt flow can push per-device secrets.
 ```
 
-First flash is via UART (BOOT pin held LOW); subsequent flashes are OTA over Wi-Fi:
+**Getting a first build onto the hub** — UART is only needed if the board can't boot any firmware at all:
+
+- **Hub still on OEM firmware:** flash via [Path A](#path-a-existing-hub-running-oem-firmware-web-ble--the-easy-path) first (or self-host the [web installer](web-installer/README.md) with your own bin), then push your build over Wi-Fi — see [Updating a running hub](#updating-a-hub-already-running-this-firmware).
+- **Bare or bricked board:** UART with the BOOT pin held LOW at power-up:
 
 ```sh
-# First time, UART
-esphome upload quietcool-atticfan.yaml --device COM<N>
-
-# Subsequent, OTA
-./flash.bat                                  # wraps `esphome upload --device <mdns>.local`
+esphome upload quietcool-atticfan.yaml --device COM5              # Windows
+esphome upload quietcool-atticfan.yaml --device /dev/ttyUSB0      # Linux
+esphome upload quietcool-atticfan.yaml --device /dev/cu.usbserial-XXXX  # macOS
 ```
 
-ESPHome 2026.5+ required — enforced by `min_version` in the YAML (`uv tool install esphome`).
+### Updating a hub already running this firmware
+
+Once the hub runs this firmware, every update path is over the air — no enclosure, no UART. Pick whichever fits your setup (all cross-platform):
+
+| How | Command / where | Notes |
+|---|---|---|
+| **ESPHome CLI** | `esphome run quietcool-atticfan.yaml --device quietcool-atticfan-<id>.local` | Compiles and OTA-pushes in one step on any OS (`flash.bat` is just a Windows convenience wrapper around the same commands). The push authenticates with the `ota_password` in your `secrets.yaml` — it must match what's on the device. |
+| **ESPHome dashboard** | Device card → **Install** → **Wirelessly** | The GUI path — natural fit for devices adopted into the dashboard, which then manages the per-device OTA password for you. |
+| **HTTP flash** | `curl -X POST -d '' "http://<host>/api/flash_url?url=<bin-url>&md5=<md5>"` | The hub downloads the bin itself from any URL its Wi-Fi can reach; host the `firmware.ota.bin` that `esphome compile` produced. Omit `md5` and it fetches `<bin-url>.md5` instead. Also available as the bottom card of the [Web Installer](web-installer/README.md) — no shell needed. |
+| **BLE** | OEM `Upgrade` (A=10) from a paired client | Headless flashing with no HA and no browser — see [Path C](#path-c-re-flash-custom-firmware-over-ble) below. |
+
+> **Adopted devices:** after HA **Adopt**, the ESPHome dashboard generates its own per-device wrapper YAML and OTA password, and the dashboard route becomes the path of least resistance. To keep pushing from a clone of this repo instead, copy the dashboard-generated OTA password into your `secrets.yaml`.
 
 ### Path C: re-flash custom firmware over BLE
 
@@ -483,7 +498,7 @@ A hub already running this firmware can be re-flashed **over BLE**, using the OE
 - **Auth-gated.** Only a *paired* client can trigger it, and the first pairing needs the physical KEY2 long-hold — so this is not a remote-flash hole for in-range strangers.
 - **OEM domains are blocked.** URLs on `myquietcool.com`/`quietcool.com` no-op (ack success, flash nothing) so the stock app can't revert you to stock this way. Any other `http(s)` URL flashes.
 - **Progress.** `GetUpgradeState` (A=5) returns `Downloading_Progress` once accepted and `Download_Fail` if the download fails; on success the hub reboots (BLE drops, then the device reappears).
-- **Host a `.md5` companion.** `ota.http_request` requires a checksum (there's no skip-check), and the BLE `Upgrade` command is kept OEM-identical (URL only) — so the hub fetches the checksum from **`<url>.md5`**. Serve `firmware.ota.bin` *and* `firmware.ota.bin.md5` (32 hex chars) side by side. Generate it with e.g. `(Get-FileHash -Algorithm MD5 firmware.ota.bin).Hash.ToLower()`.
+- **Host a `.md5` companion.** `ota.http_request` requires a checksum (there's no skip-check), and the BLE `Upgrade` command is kept OEM-identical (URL only) — so the hub fetches the checksum from **`<url>.md5`**. Serve `firmware.ota.bin` *and* `firmware.ota.bin.md5` (32 hex chars) side by side. Generate it with `md5sum firmware.ota.bin` (Linux), `md5 -q firmware.ota.bin` (macOS), or `(Get-FileHash -Algorithm MD5 firmware.ota.bin).Hash.ToLower()` (PowerShell).
 - The bin must be built for this project's [`partitions.csv`](partitions.csv) layout — same constraint as the HTTP-flash paths.
 
 This complements the HTTP endpoint (`POST /api/flash_url`) and ESPHome OTA: it's the BLE-triggered equivalent.
@@ -500,7 +515,7 @@ This complements the HTTP endpoint (`POST /api/flash_url`) and ESPHome OTA: it's
   creds-dist.yaml               # dist — no api/ota secrets; HA Adopt pushes per-user
   partitions.csv                # OEM-compatible: nvs@0x9000, ota_0@0x20000, ota_1@0x200000
   secrets.yaml.example          # template (real secrets.yaml is gitignored)
-  flash.bat                     # compile + OTA upload, one shot
+  flash.bat                     # compile + OTA upload, one shot (Windows sugar — `esphome run` does the same anywhere)
   LICENSE                       # GPL-3.0
   web-installer/                # Web BLE + HTTP-flash installer page (see its README)
   components/
