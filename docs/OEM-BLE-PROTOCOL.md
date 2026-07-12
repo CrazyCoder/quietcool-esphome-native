@@ -199,9 +199,10 @@ Transitions:
 
 ## 4. Command catalog
 
-22 JSON commands map to V2 numeric codes **1–22** (`12` is a device-push, see the
-note). Two additional **binary** commands (28, 29) share the characteristic but use a
-raw-byte format — see [§10](#10-binary-commands).
+Client-callable JSON commands occupy V2 codes **1–11** and **13–22**. Code **12** is
+**not** callable — the hub uses it only for an unsolicited *push* (see the table row).
+Two additional **binary** commands (28, 29) share the characteristic but use a raw-byte
+format — see [§10](#10-binary-commands).
 
 Legend for **Gate**: **pre** = allowed before authentication; **pair** = requires pair
 mode (`pair_state==2`); **auth** = requires `pair_state==1`.
@@ -219,7 +220,7 @@ mode (`pair_state==2`); **auth** = requires `pair_state==1`.
 | 9  | SetMode | write | auth | Fan mode: Idle / Run / Timer / TH (Smart) |
 | 10 | Upgrade | write | auth | Buffer a firmware URL (OTA) |
 | 11 | SetRouter | write | auth | Set Wi-Fi SSID + password |
-| 12 | — | — | — | Reserved / unused — no client-callable handler. (The hub can *push* an unsolicited state frame on a physical button press or over-temp cutoff; the app labels those "ManualSendState.") |
+| 12 | ManualSendState | **push** | — | **Not a command you can send** — the dispatcher has no handler and replies `"Api Error"`. The hub *emits* it unsolicited: `{"A":12,"R":"<speed>"}` on a physical KEY1 speed change or an over-temp cutoff. The OEM app parses incoming A=12 as `ManualSendState`. |
 | 13 | Login | auth | **pre** | Authenticate with a stored pair-id |
 | 14 | Pair | auth | **pair** | Register a new pair-id (pair mode only) |
 | 15 | PairMode | auth | auth | Enter pair mode to add another phone |
@@ -698,8 +699,9 @@ graphs.
 - **Turning the fan on takes two writes** on V2: `SetSpeed` to choose the speed, then
   `SetMode` with `"Run"` (or `"Timer"`). A single write won't start it.
 - **The hub does not push state on BLE-initiated changes.** Only a physical KEY1 speed
-  change or an over-temp cutoff produces an unsolicited notification; otherwise clients
-  poll `GetWorkState` (the OEM app polls ~every 10 s).
+  change or an over-temp cutoff produces an unsolicited notification — sent as an
+  `{"A":12,"R":"<speed>"}` "ManualSendState" frame (code 12 is push-only; you cannot send
+  it). Otherwise clients poll `GetWorkState` (the OEM app polls ~every 10 s).
 - **Units ship with factory-baked Wi-Fi credentials** (a manufacturing test network) in
   NVS. They persist across an OTA. Not needed to operate the hub, but worth wiping via a
   factory reset if you care.
