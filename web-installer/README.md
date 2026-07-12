@@ -17,8 +17,9 @@ paths, picked by where the hub is in its lifecycle:
    Bluetooth browser — Chrome or Edge on a Windows/macOS/Linux/Android machine, or
    Bluefy on iOS — within Bluetooth range of the hub and walk the wizard. The same flow can
    also re-install OEM `V4.1` on a stock-firmware hub. Once the ESPHome firmware is
-   running this path no longer applies — the hub no longer speaks the OEM BLE
-   protocol.
+   running, this flow no longer serves to change its firmware: the hub still speaks
+   the OEM BLE protocol, but its `Upgrade` command refuses QuietCool's firmware
+   domains, so it can't be rolled back to stock over BLE — use path 2 instead.
 2. **HTTP flash flow (section at the bottom).** Pushes any firmware URL onto a hub
    already running the ESPHome firmware. It calls the device's built-in
    `POST /api/flash_url` endpoint, provided by the `http_flash_handler` component
@@ -57,8 +58,9 @@ OEM OTA mechanism — only the firmware URL changes.
   bin on QuietCool's CDN (`http://myquietcool.com/.../IT-BLT-ATTICFAN_V4.1_*.bin`),
   which is byte-for-byte what the OEM Android app would flash. Useful for rolling
   back from a buggy OEM update or starting fresh before pairing. **Only works while
-  the hub is still running OEM firmware** — once ESPHome is installed, the hub no
-  longer speaks the OEM BLE V2 protocol and this Web-BLE path can't reach it.
+  the hub is still running OEM firmware** — once ESPHome is installed, its `Upgrade`
+  command refuses QuietCool's firmware domains (the hub still speaks OEM BLE, it just
+  won't accept a stock bin over it), so restoring stock goes through the HTTP path below.
 
 To roll a hub that is **already running ESPHome** back to stock, use the **HTTP
 flash** section at the bottom of the page (the `http_flash_handler` endpoint), the

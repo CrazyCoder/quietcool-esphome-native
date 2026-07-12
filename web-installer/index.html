@@ -99,7 +99,7 @@
 
   <div class="card" id="card-target">
     <h2>2. What do you want to install?</h2>
-    <p class="muted">Both options use the same OEM OTA mechanism — you'll still pick auth, Wi-Fi, etc. below. <strong>Either one only works while the hub is still running OEM firmware</strong>; once it's running the ESPHome firmware, this Web-BLE page can't talk to it anymore — use the <a href="#card-esphome-flash" style="color:var(--accent)">HTTP flash section at the bottom</a> instead.</p>
+    <p class="muted">Both options use the same OEM OTA mechanism — you'll still pick auth, Wi-Fi, etc. below. <strong>Both assume the hub is still running OEM firmware.</strong> If it's <em>already</em> running the ESPHome firmware, use the <a href="#card-esphome-flash" style="color:var(--accent)">HTTP flash section at the bottom</a> instead: that firmware still speaks OEM BLE (the stock app keeps working), but its <code>Upgrade</code> command refuses QuietCool's own firmware domains, so this Web-BLE flow can't roll it back to stock.</p>
 
     <div class="mode-block selected" id="target-esphome-block">
       <label class="head"><input type="radio" name="target" value="esphome" checked> <strong>Install ESPHome (custom firmware)</strong></label>
@@ -148,7 +148,7 @@
 
         <div class="callout" style="border-left-color: var(--accent); background: rgba(78,192,255,.08)"><strong style="color: var(--accent)">Method B — OEM Android app</strong>
           <ol class="step-list" style="margin: 6px 0 0 0">
-            <li>Open the <strong>QuietCool Smart Control</strong> app on this phone (or another phone). Tap your hub, then tap <strong>Pair Mode</strong>.</li>
+            <li>On a phone with the <strong>QuietCool Smart Control</strong> app (Android/iOS only — it needn't be the device running this installer), tap your hub, then tap <strong>Pair Mode</strong>.</li>
             <li>Wait until the app confirms pair mode is active.</li>
             <li><strong>Force-close the OEM app</strong> (swipe it away in the recents view). The hub only allows one BLE central at a time — leaving the app open will block this page from connecting.</li>
             <li>Come back here and click <em>Connect via Bluetooth</em> below.</li>
@@ -208,7 +208,8 @@
 
   <div class="card" id="card-esphome-flash">
     <h2>Already running the ESPHome firmware?</h2>
-    <p class="muted">If your hub is already running the ESPHome firmware (so the Web-BLE flow above no longer applies — this firmware doesn't speak OEM BLE), use this section to flash any firmware URL onto it: the OEM stock <code>V4.1</code> to roll back, a custom build hosted somewhere, an alternative ESPHome image, anything. Uses the device's built-in <code>POST /api/flash_url</code> endpoint over plain HTTP, no Bluetooth required.</p>
+    <p class="muted">If your hub is <strong>already running the ESPHome firmware</strong>, use this section to flash any firmware URL onto it: the OEM stock <code>V4.1</code> to roll back, a custom build hosted somewhere, an alternative ESPHome image, anything. It uses the device's built-in <code>POST /api/flash_url</code> endpoint over plain HTTP, no Bluetooth required.</p>
+    <p class="muted">The ESPHome firmware still speaks OEM BLE (the stock QuietCool Smart Control app keeps pairing and controlling it), but its <code>Upgrade</code> command deliberately <strong>blocks QuietCool's firmware domains</strong> — so the Web-BLE flow above can't push the stock bin back over Bluetooth. This HTTP path reaches the device directly and isn't subject to that.</p>
 
     <label for="esphome-host">Device hostname or IP</label>
     <input id="esphome-host" type="text" placeholder="quietcool-atticfan-XXXXXX.local" autocomplete="off" autocapitalize="off" spellcheck="false">
@@ -216,7 +217,7 @@
 
     <label for="esphome-url">Firmware URL (.bin)</label>
     <input id="esphome-url" type="url" placeholder="https://..." autocomplete="off" autocapitalize="off" spellcheck="false">
-    <p class="muted">Must start with <code>http://</code> or <code>https://</code>. The hub fetches this URL from its Wi-Fi, not from your phone.</p>
+    <p class="muted">Must start with <code>http://</code> or <code>https://</code>. The hub fetches this URL over its own Wi-Fi — not through the device running this page.</p>
     <div class="callout"><strong>Partition layout matters</strong> — only firmwares built for the OEM IT-AF-SMT layout will flash here (OTA slots at <code>0x20000</code> and <code>0x200000</code>, 1.875 MB each). Safe to flash: the OEM bins from <code>myquietcool.com</code>, this project's own builds (preserve the OEM layout via <code>partitions.csv</code>), and forks that ship the same <code>partitions.csv</code>. Will fail or brick-then-rollback: stock ESPHome builds with the default 4 MB partition layout (different OTA addresses + slot sizes). If a flash succeeds but the device never reappears, power-cycle — ESP-IDF will roll back to the previous firmware in the other slot.</div>
 
     <label for="esphome-md5">MD5 (optional, 32 hex chars)</label>
