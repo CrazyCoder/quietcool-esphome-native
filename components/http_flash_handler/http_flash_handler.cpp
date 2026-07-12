@@ -3,6 +3,8 @@
 #include "esphome/core/log.h"
 #include "esphome/components/web_server_base/web_server_base.h"
 
+#include <esp_ota_ops.h>
+
 namespace esphome {
 namespace quietcool {
 
@@ -68,8 +70,44 @@ void HttpFlashHandler::setup() {
     ESP_LOGE(TAG, "ota.http_request component not wired — HTTP flash endpoint unavailable");
     return;
   }
+  // Listen for OTA completion so request_rollback_confirm() can mark a
+  // foreign-firmware slot valid before the reboot (see on_ota_state).
+  ota_->add_state_listener(this);
   web_server_base::global_web_server_base->add_handler(new FlashUrlHandler(this));
   ESP_LOGCONFIG(TAG, "Registered POST /api/flash_url");
+}
+
+void HttpFlashHandler::on_ota_state(ota::OTAState state, float progress, uint8_t error) {
+  (void) progress;
+  (void) error;
+  switch (state) {
+    case ota::OTA_COMPLETED:
+      if (this->confirm_after_flash_) {
+        this->confirm_after_flash_ = false;
+        // backend->end() has already called esp_ota_set_boot_partition() on the
+        // just-written slot, so it is now the ACTIVE otadata entry (state NEW).
+        // esp_ota_mark_app_valid_cancel_rollback() operates on the active entry
+        // (not specifically the running partition), so this flips the NEW slot
+        // to VALID. The bootloader then boots it as an ordinary image with no
+        // pending-verify — foreign firmware that can't self-confirm stays put
+        // instead of rolling back to us. Runs just before App.safe_reboot().
+        esp_err_t err = esp_ota_mark_app_valid_cancel_rollback();
+        if (err == ESP_OK) {
+          ESP_LOGW(TAG, "Confirmed new firmware slot VALID — app-rollback will keep it");
+        } else {
+          ESP_LOGE(TAG, "Could not confirm new slot (err=0x%X); it may roll back to us", err);
+        }
+      }
+      break;
+    case ota::OTA_ERROR:
+    case ota::OTA_ABORT:
+      // Flash failed → no reboot happens. Disarm so a later, unrelated OTA on
+      // this component isn't wrongly stripped of its rollback protection.
+      this->confirm_after_flash_ = false;
+      break;
+    default:
+      break;
+  }
 }
 
 void HttpFlashHandler::dump_config() {

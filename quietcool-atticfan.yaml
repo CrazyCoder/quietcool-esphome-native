@@ -549,6 +549,15 @@ button:
   # guarantees this) so the previous ESPHome firmware survives in the other
   # slot for one-OTA rollback if needed.
   #
+  # IMPORTANT: this firmware is built with ESP-IDF app-rollback enabled
+  # (CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y). Stock firmware never calls
+  # esp_ota_mark_app_valid_cancel_rollback(), so the bootloader would boot it
+  # once in pending-verify state and REVERT to us on the next reset. To make
+  # the restore stick, we arm id(http_flasher).request_rollback_confirm()
+  # before flashing — it marks the freshly-written stock slot VALID at
+  # OTA_COMPLETED (just before reboot). Rollback stays enabled for every other
+  # OTA path; only this deliberate foreign-firmware flash opts out.
+  #
   # The MD5 below is of the stock V4.1 image exactly as served at the
   # myquietcool.com URL in the flash action.
   #
@@ -578,6 +587,9 @@ button:
             // a clean NVS — this firmware's preference entries (~3 KB) would
             // otherwise persist as dead weight on the tight 16 KB partition.
             global_preferences->reset();
+            // Arm the one-shot rollback-confirm: stock can't self-confirm, so
+            // mark its slot VALID at OTA_COMPLETED or app-rollback reverts us.
+            id(http_flasher).request_rollback_confirm();
         - ota.http_request.flash:
             md5: "36d2e90dcfdd553272fc4eebdc3c4444"
             url: http://myquietcool.com/profile/upload/2025/11/18/IT-BLT-ATTICFAN_V4.1_20251118010357A008.bin
@@ -1169,6 +1181,7 @@ web_server:
 # on that component, which handles the actual OTA + reboot.
 # ====================================================================
 http_flash_handler:
+  id: http_flasher
   ota_id: http_ota
 
 # ====================================================================
