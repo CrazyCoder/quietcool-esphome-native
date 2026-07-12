@@ -122,18 +122,8 @@
     <h2>3. How will you authenticate?</h2>
     <p class="muted">The hub rejects every command except <code>Login</code> until a valid pair-id authenticates the session. Pick the path that matches your hub's current state — <strong>read this before connecting</strong>, because once this page grabs the BLE link, the OEM Android app can't talk to the hub at the same time.</p>
 
-    <div class="mode-block selected" id="mode-login-block">
-      <label class="head"><input type="radio" name="auth-mode" value="login" checked> <strong>Brand-new hub, or I have a pair-id</strong></label>
-      <div class="body">
-        <p class="muted">A factory-fresh hub accepts the OEM's built-in test pair-id with no button press — just keep the default below. This also works if you saved a pair-id from a previous run of this wizard in this browser.</p>
-        <label for="pairid">Pair ID (max 100 chars)</label>
-        <input id="pairid" type="text" autocomplete="off" autocapitalize="off" spellcheck="false">
-        <p class="muted">Default <code>1234567dsad8wqw9asasd</code> is the OEM's factory test ID — stops working the first time the OEM Android app pairs with the hub.</p>
-      </div>
-    </div>
-
-    <div class="mode-block collapsed" id="mode-pair-block">
-      <label class="head"><input type="radio" name="auth-mode" value="pair"> <strong>Hub is already in use — put it into pair mode</strong></label>
+    <div class="mode-block selected" id="mode-pair-block">
+      <label class="head"><input type="radio" name="auth-mode" value="pair" checked> <strong>Hub is already in use — put it into pair mode</strong></label>
       <div class="body">
         <p>Once the OEM Android app pairs with a hub, the factory test ID stops working and the real pair-id isn't user-visible. This path side-steps that by putting the hub into pair mode so we can register a fresh ID.</p>
         <p><strong>Pick whichever is easier for you</strong> — both end with the hub advertising as pairable for ~tens of seconds:</p>
@@ -156,6 +146,16 @@
         </div>
 
         <p class="muted">When you press <strong>Connect &amp; flash</strong>, this wizard will register a fresh random pair-id with the hub and save it in this browser so you can retry without re-running pair mode if anything goes wrong.</p>
+      </div>
+    </div>
+
+    <div class="mode-block collapsed" id="mode-login-block">
+      <label class="head"><input type="radio" name="auth-mode" value="login"> <strong>Brand-new hub, or I have a pair-id</strong></label>
+      <div class="body">
+        <p class="muted">A factory-fresh hub accepts the OEM's built-in test pair-id with no button press — just keep the default below. This also works if you saved a pair-id from a previous run of this wizard in this browser.</p>
+        <label for="pairid">Pair ID (max 100 chars)</label>
+        <input id="pairid" type="text" autocomplete="off" autocapitalize="off" spellcheck="false">
+        <p class="muted">Default <code>1234567dsad8wqw9asasd</code> is the OEM's factory test ID — stops working the first time the OEM Android app pairs with the hub.</p>
       </div>
     </div>
   </div>

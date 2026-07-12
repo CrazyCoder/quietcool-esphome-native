@@ -359,7 +359,7 @@ async function runFlashFlow() {
   // requires a user-gesture for requestDevice(), so we can't do anything
   // async first — but synchronous validation of the form fields is fine and
   // avoids wasting the (short) pair-mode window on a typo.
-  const mode   = document.querySelector('input[name="auth-mode"]:checked')?.value || "login";
+  const mode   = document.querySelector('input[name="auth-mode"]:checked')?.value || "pair";
   const ssid   = els.ssid.value.trim();
   const pwd    = els.pwd.value;
   const url    = els.url.value.trim();
@@ -615,7 +615,7 @@ function escapeHtml(s) {
 }
 
 function updateAuthModeUi() {
-  const mode = document.querySelector('input[name="auth-mode"]:checked')?.value || "login";
+  const mode = document.querySelector('input[name="auth-mode"]:checked')?.value || "pair";
   const loginBlock = document.getElementById("mode-login-block");
   const pairBlock  = document.getElementById("mode-pair-block");
   loginBlock.classList.toggle("selected",  mode === "login");

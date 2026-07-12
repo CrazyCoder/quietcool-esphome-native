@@ -1,20 +1,14 @@
 # Build the credential-free (dist) firmware and publish it together with the
 # Web BLE installer to GitHub Pages.
 #
-# ── One-time setup (do this once the repo is PUBLIC) ──────────────────────────
-#   GitHub Pages requires a public repo (or a paid plan for private Pages).
-#   1. Settings → Pages → Build and deployment → Source: "GitHub Actions".
-#   2. Uncomment the `push:` trigger below so every push to main redeploys.
-#
-# Until then this workflow only runs when you start it manually from the Actions
-# tab ("Run workflow"), so it never leaves failed runs on a private repo.
-# ──────────────────────────────────────────────────────────────────────────────
+# Every push to main redeploys (requires Settings → Pages → Source: "GitHub
+# Actions", and a public repo — private Pages needs a paid plan).
 name: Deploy Web installer
 
 on:
   workflow_dispatch:
-  # push:
-  #   branches: [main]
+  push:
+    branches: [main]
 
 # Least privilege + what the Pages deploy needs.
 permissions:
