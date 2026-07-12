@@ -715,14 +715,13 @@ the protocol above so the **stock QuietCool Smart Control app keeps working** af
 flash it: pairing, `Login`, `GetWorkState`, speed/mode control, Smart Mode thresholds,
 presets, and fan info all behave as the app expects (V2 numeric, `QQ` prefix, same field
 names, same gating). It is exposed as the `Smart Control (BLE)` switch and advertises the
-same `ATTICFAN_<mac>` name.
+same `ATTICFAN_<mac>` name. **Pairing is preserved exactly as on stock** — an unpaired hub
+enters pair mode only via a physical KEY2 press on the device, and `PairMode` (A=15) is
+auth-gated, so an in-range stranger can't pair themselves remotely (the physical button is
+the trust boundary — treating A=15 as pre-auth would be a remote-pairing hole).
 
 Where it **deliberately diverges** from stock:
 
-- **Pairing stays physical.** The first pairing requires the physical KEY2 long-hold,
-  and `PairMode` (A=15) is auth-gated exactly as on stock — so an in-range stranger
-  cannot pair themselves. (Matching this gate is a hard requirement; treating A=15 as
-  pre-auth would be a remote-pairing hole.)
 - **`Upgrade` (A=10) is the trigger, and it filters URLs.** Unlike stock — where
   `SetRouter` starts the OTA — this firmware acts on `Upgrade` itself. It classifies the
   URL:
