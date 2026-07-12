@@ -30,6 +30,23 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Capture this before ESPHome imports local components: Python may create
+      # __pycache__ files under components/ during the build, and those generated
+      # files must not make an unchanged source tree look like new firmware.
+      - name: Fingerprint firmware inputs
+        id: firmware-inputs
+        shell: bash
+        run: |
+          input_hash="$(
+            git ls-files --stage -- \
+                quietcool-atticfan.yaml wifi-dist.yaml creds-dist.yaml \
+                partitions.csv components \
+              | awk 'index($4, "/test/") == 0' \
+              | sha256sum \
+              | awk '{print $1}'
+          )"
+          echo "hash=$input_hash" >> "$GITHUB_OUTPUT"
+
       # Reuse the previously-built firmware when nothing that feeds the dist
       # build has changed — site-only pushes then skip the whole ESP-IDF
       # toolchain (~4-5 min) and deploy in well under a minute. The key hashes
@@ -87,13 +104,13 @@ jobs:
           echo "Staged firmware ($(du -h "$BIN" | cut -f1)), md5 $(cat web-installer/firmware.ota.bin.md5)"
 
       - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: web-installer
 
       - name: Prepare firmware release artifact
         env:
-          FIRMWARE_INPUT_HASH: ${{ hashFiles('quietcool-atticfan.yaml', 'wifi-dist.yaml', 'creds-dist.yaml', 'partitions.csv', 'components/**', '!components/**/test/**') }}
+          FIRMWARE_INPUT_HASH: ${{ steps.firmware-inputs.outputs.hash }}
         shell: bash
         run: |
           mkdir release-artifact
