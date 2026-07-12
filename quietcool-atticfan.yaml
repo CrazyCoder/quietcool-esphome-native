@@ -7,6 +7,9 @@ esphome:
   name: quietcool-atticfan
   friendly_name: QuietCool Attic Fan
   name_add_mac_suffix: true
+  # Uses web_server v3, select/text entity APIs, and OTA http_request
+  # behaviors validated against 2026.5 — refuse to compile on older cores.
+  min_version: 2026.5.0
   on_boot:
     priority: -10
     then:
@@ -564,7 +567,7 @@ button:
     id: restore_stock_firmware
     name: "Restore Stock Firmware"
     icon: mdi:backup-restore
-    entity_category: diagnostic
+    entity_category: config
     on_press:
       then:
         - logger.log:
@@ -673,12 +676,10 @@ switch:
   # publishes state to HA exactly as if the fan were running — but the
   # relay GPIO writes are suppressed. Useful for safely iterating firmware
   # while the fan is physically wired in the attic.
-  # Defaults OFF (relays live) so safety is the default; persists across
-  # reboots so iteration sessions don't need to re-enable every flash. ---
-  # Dry Run is a developer/testing toggle, not a persistent user setting —
-  # default OFF on every boot is the safe behavior and avoids one extra
-  # NVS write per change (the NVS partition is only 16 KB on this OEM
-  # hardware — wear minimization matters).
+  # Defaults OFF (relays live) so safety is the default. RESTORE_DEFAULT_OFF
+  # persists a deliberate ON across reboots so iteration sessions don't need
+  # to re-enable it after every flash; the switch is toggled rarely, so the
+  # NVS write cost is negligible. ---
   - platform: template
     id: dry_run_enabled
     name: "Dry Run Mode"
@@ -911,7 +912,7 @@ fan:
 # the device-settings panel rather than the dashboard. ---
 number:
   - platform: template
-    name: "Run Time"
+    name: "Default Run Time"
     id: default_run_time
     icon: mdi:timer-cog
     entity_category: config
@@ -1125,9 +1126,10 @@ led_state_machine:
   led3: led3_speed
   led4: led4_pair
   fan_controller_id: attic_fan
-  # When Improv-BLE is advertising, LED4 goes 10 Hz
-  # (distinct from the 5 Hz "Wi-Fi down" and 1 Hz "HA down" patterns) so
-  # the user can tell at a glance that the device is currently provisionable.
+  # When Improv-BLE is advertising, LED4 goes 10 Hz (distinct from the
+  # 1 Hz pair-mode SlowBlink) so the user can tell at a glance that the
+  # device is currently provisionable. Wi-Fi/HA connectivity is deliberately
+  # not shown on LEDs — see led_state_machine_logic.h.
   improv_id: improv_component
   pair_mode_switch: ble_pair_mode
 

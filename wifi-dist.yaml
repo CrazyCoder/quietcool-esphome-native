@@ -17,3 +17,7 @@ wifi:
   # oem_nvs_reader writes to exactly that slot before WIFI setup runs.
   ap:
     ssid: "QuietCool Setup"
+    # Fallback AP (and Improv-BLE re-provisioning) come up 90 s after the
+    # last good STA connection drops — long enough to ride out a router
+    # reboot without flapping into AP mode.
+    ap_timeout: 90s
