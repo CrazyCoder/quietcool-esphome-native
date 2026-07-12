@@ -1,12 +1,12 @@
 # QuietCool Web Installer
 
-> **▶ Already hosted — flash without setting anything up:**
-> **<https://crazycoder.github.io/quietcool-esphome-native/>**
->
-> Open that in a Web Bluetooth browser (Chrome or Edge on Windows/macOS/Linux/Android,
-> or Bluefy on iOS) on any computer or phone within Bluetooth range of the hub to flash
-> it over BLE — the credential-free firmware bin is served alongside it, so there's
-> nothing to build or host. The rest of this document covers self-hosting and the internals.
+## ▶ Already hosted — flash without setting anything up
+
+<a href="https://crazycoder.github.io/quietcool-esphome-native/"><img src="../docs/images/web-installer-qr.png" align="right" width="150" alt="QR code — scan with a phone to open the Web Installer" /></a>
+
+**[Open the Web Installer → crazycoder.github.io/quietcool-esphome-native](https://crazycoder.github.io/quietcool-esphome-native/)** in a Web Bluetooth browser (Chrome or Edge on Windows, macOS, Linux, or Android, or Bluefy on iOS) on any computer or phone within Bluetooth range of the hub. It flashes the credential-free firmware over BLE, so there's nothing to build or host.
+
+Installing from a phone? **Scan the QR code** instead of typing the URL. The rest of this document covers self-hosting and the internals.
 
 A single-page wizard that flashes custom ESPHome firmware onto a QuietCool
 IT-AF-SMT hub — no UART or APK sideload. A previously paired hub still needs

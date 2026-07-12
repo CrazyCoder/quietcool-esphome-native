@@ -1,18 +1,20 @@
 # QuietCool Attic Fan — ESPHome firmware
 
-Open-source ESPHome firmware for the **QuietCool IT-AF-SMT Smart Attic Fan Control** hub (ESP32-WROOM-32D). Replaces the OEM `IT-BLT-ATTICFAN_V4.1` while preserving the OEM partition layout, so the byte-perfect stock firmware can always be re-flashed in place using the same plain-HTTP OTA mechanism the OEM uses — exposed here as an HA button, a dual-button gesture, and a Web Installer card. (The stock app's own in-app updater is deliberately blocked so it can't silently revert you; see [Going back to stock](#going-back-to-stock).)
+Open-source ESPHome firmware for the **QuietCool IT-AF-SMT Smart Attic Fan Control** hub (ESP32-WROOM-32D). It turns the controller already mounted on your fan into a local Wi-Fi device with native Home Assistant integration, a built-in web UI, and a REST API — no separate ESP32, Bluetooth proxy, or cloud service required.
+
+It replaces the OEM firmware while retaining the controller's fan speeds, countdown timer, autonomous temperature/humidity Smart Mode, buttons, LEDs, and compatibility with the QuietCool Smart Control app over BLE. Use it when you want reliable whole-home control and automation without keeping a phone or Bluetooth bridge within range of the attic.
 
 **The hardware:** QuietCool sells the controller standalone as a retrofit for existing attic fans (~$69 — [manufacturer store](https://store.quietcoolsystems.com/products/quietcool-smart-attic-fan-control-replacement), [Amazon](https://www.amazon.com/QuietCool-Smart-Attic-Fan-Control/dp/B0B2ZKD5PG), [Home Depot](https://www.homedepot.com/p/QuietCool-Wireless-Smart-Control-For-Attic-Fans-IT-AF-SMT/321550100)), and it ships bundled with the AFG SMT series smart attic fans. Official docs: [IT-AF-SMT owner's guide (PDF)](https://quietcoolsystems.com/wp-content/uploads/2024/08/IT-AF-SMT-Owners-Guide-6-30-23-Web.pdf).
 
 **Status:** fan control, Smart Mode (autonomous temp/humidity auto-switch), countdown timer, reboot-resume, LED indicators, button gestures, and full OEM BLE compatibility (stock QuietCool Smart Control app works with this firmware) are all live and tested end-to-end.
 
-> ## ▶ Install it now — nothing to build
->
-> <a href="https://crazycoder.github.io/quietcool-esphome-native/"><img src="docs/images/web-installer-qr.png" align="right" width="150" alt="QR code — scan with a phone to open the Web Installer" /></a>
->
-> **[Open the Web Installer → crazycoder.github.io/quietcool-esphome-native](https://crazycoder.github.io/quietcool-esphome-native/)** from any Bluetooth-equipped computer or phone within radio range of the powered hub — Chrome or Edge on Windows, macOS, Linux, or Android, or Bluefy on iOS. It flashes the ready-to-run, credential-free firmware over the hub's own BLE OTA in about two minutes — no compiling, no downloads, no UART, nothing to host yourself. Step-by-step below: [Installing the firmware](#installing-the-firmware).
->
-> Installing from a phone? **Scan the QR code** instead of typing the URL.
+## ▶ Install it now — nothing to build
+
+<a href="https://crazycoder.github.io/quietcool-esphome-native/"><img src="docs/images/web-installer-qr.png" align="right" width="150" alt="QR code — scan with a phone to open the Web Installer" /></a>
+
+**[Open the Web Installer → crazycoder.github.io/quietcool-esphome-native](https://crazycoder.github.io/quietcool-esphome-native/)** from any Bluetooth-equipped computer or phone within radio range of the powered hub — Chrome or Edge on Windows, macOS, Linux, or Android, or Bluefy on iOS. It flashes the ready-to-run, credential-free firmware over the hub's own BLE OTA in about two minutes — no compiling, no downloads, no UART, nothing to host yourself. Step-by-step below: [Installing the firmware](#installing-the-firmware).
+
+Installing from a phone? **Scan the QR code** instead of typing the URL.
 
 > **A distribute-anywhere firmware bundle.** The credential-free `dist` build (`esphome -s build_mode dist compile quietcool-atticfan.yaml`) ships with no Wi-Fi creds, no API encryption key, and no OTA password baked in: at boot, `oem_nvs_reader` imports Wi-Fi creds from the OEM-stored NVS partition (so anyone whose hub was previously connected via the QuietCool app joins their network within ~5 s), then the ESPHome dashboard's **Adopt** flow generates per-device api/ota secrets and OTA-pushes them.
 
