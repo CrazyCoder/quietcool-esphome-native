@@ -581,7 +581,9 @@ The cleanup is idempotent: `nvs_erase_key` on an already-missing key returns `ES
 
 The erased `Group_*` blobs are **not required** by the OEM firmware for normal operation. When the stock firmware boots and finds a missing `Group_*` key, `nvs_get_blob` returns `ESP_ERR_NVS_NOT_FOUND` and the hourly logger simply starts fresh — creating the blob on its next periodic write. No crash, no data loss, no reconfiguration needed.
 
-BLE pair-ids, Smart Mode thresholds, presets, Wi-Fi credentials, and all other OEM settings are untouched by the cleanup. A user who reverts to stock keeps their paired phones and configuration.
+BLE pair-ids, Smart Mode thresholds, presets, and Wi-Fi credentials are untouched by the cleanup itself.
+
+**Flashing back to stock resets your BLE pairing, though.** Once this firmware has managed the hub, reverting to OEM firmware leaves the previous pair-ids no longer authenticating — `Login` returns `Fail`, so the OEM app (and any BLE client) can't reconnect until you **re-pair**: put the hub in pair mode with the KEY2 long-hold and pair again from the QuietCool app. (Other `hx_list` data such as Smart Mode thresholds and presets is not wiped by the OTA, but whether stock reads it back cleanly after this firmware has managed the namespace hasn't been verified — the pairing is the one thing you definitely have to redo.)
 
 ---
 

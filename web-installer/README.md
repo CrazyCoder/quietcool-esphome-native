@@ -69,8 +69,12 @@ reflash. The OEM `Upgrade` command over BLE deliberately refuses OEM firmware
 domains, so it can't be used to flash stock over an ESPHome hub — that's why
 rollback goes through the HTTP path, not BLE.
 
-Factory restore via this page does NOT wipe NVS (Wi-Fi creds, pair-ids, and Smart
-Mode thresholds all persist — only the app partition gets rewritten). A real
+Factory restore via this page rewrites only the app partition, not NVS. **BLE pairings
+still reset, though:** once a hub has run the ESPHome firmware, reverting it to stock
+leaves the previous pair-ids no longer authenticating (`Login` → `Fail`), so you must
+re-pair (KEY2 long-hold + the OEM app) before BLE control works again. Other NVS data
+(Smart Mode thresholds, presets) isn't wiped by the OTA, but whether stock reads it back
+cleanly after this firmware has managed the `hx_list` namespace is unverified. A real
 reset-to-defaults still requires the KEY1 5-second long-hold on the hub.
 
 ### Path 2: HTTP flash (any URL onto an ESPHome-running hub)
