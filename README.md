@@ -1,6 +1,6 @@
 # QuietCool Attic Fan — ESPHome firmware
 
-Open-source ESPHome firmware for the **QuietCool IT-AF-SMT Smart Attic Fan Control** hub (ESP32-WROOM-32D). Replaces the OEM `IT-BLT-ATTICFAN_V4.1` while preserving the OEM partition layout, so the OEM Android app's plain-HTTP OTA mechanism remains a valid path back to stock.
+Open-source ESPHome firmware for the **QuietCool IT-AF-SMT Smart Attic Fan Control** hub (ESP32-WROOM-32D). Replaces the OEM `IT-BLT-ATTICFAN_V4.1` while preserving the OEM partition layout, so the byte-perfect stock firmware can always be re-flashed in place using the same plain-HTTP OTA mechanism the OEM uses — exposed here as an HA button, a dual-button gesture, and a Web Installer card. (The stock app's own in-app updater is deliberately blocked so it can't silently revert you; see [Going back to stock](#going-back-to-stock).)
 
 **Status:** fan control, Smart Mode (autonomous temp/humidity auto-switch), countdown timer, reboot-resume, LED indicators, button gestures, and full OEM BLE compatibility (stock QuietCool Smart Control app works with this firmware) are all live and tested end-to-end.
 
