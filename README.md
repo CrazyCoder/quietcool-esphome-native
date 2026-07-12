@@ -16,7 +16,7 @@ Open-source ESPHome firmware for the **QuietCool IT-AF-SMT Smart Attic Fan Contr
 
 ## Why replace the stock firmware?
 
-The stock hub is controllable **only over BLE** — your phone has to be within radio range of a box mounted in the attic, and the only client is the QuietCool app. This firmware keeps everything the stock one does and adds a Wi-Fi brain:
+The stock hub is controllable **only over BLE** — whatever controls it (the QuietCool app, or one of the [third-party BLE clients below](#alternatives--prior-art)) has to be within radio range of a box mounted in the attic. This firmware keeps everything the stock one does and adds a Wi-Fi brain:
 
 | | Stock `IT-BLT-ATTICFAN_V4.1` | This firmware |
 |---|---|---|
