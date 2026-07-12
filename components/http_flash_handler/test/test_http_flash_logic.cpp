@@ -175,6 +175,35 @@ TEST("validate: out-params receive trimmed url + md5 on success") {
 }
 
 // ============================================================================
+// Known stock restore classification — only the verified OEM URL+MD5 pair
+// may opt out of app rollback and request namespace-scoped cleanup.
+// ============================================================================
+
+TEST("known stock restore: exact OEM V4.1 URL + MD5 -> true") {
+  REQUIRE(HttpFlashLogic::is_known_stock_restore(
+      HttpFlashLogic::OEM_V41_URL, HttpFlashLogic::OEM_V41_MD5));
+}
+
+TEST("known stock restore: uppercase MD5 -> true") {
+  REQUIRE(HttpFlashLogic::is_known_stock_restore(
+      HttpFlashLogic::OEM_V41_URL, "36D2E90DCFDD553272FC4EEBDC3C4444"));
+}
+
+TEST("known stock restore: OEM URL without explicit MD5 -> false") {
+  REQUIRE(!HttpFlashLogic::is_known_stock_restore(HttpFlashLogic::OEM_V41_URL, ""));
+}
+
+TEST("known stock restore: OEM URL with wrong MD5 -> false") {
+  REQUIRE(!HttpFlashLogic::is_known_stock_restore(
+      HttpFlashLogic::OEM_V41_URL, "00000000000000000000000000000000"));
+}
+
+TEST("known stock restore: stock MD5 at another URL -> false") {
+  REQUIRE(!HttpFlashLogic::is_known_stock_restore(
+      "https://example.com/oem-v41.bin", HttpFlashLogic::OEM_V41_MD5));
+}
+
+// ============================================================================
 // status_message() — user-facing text for each result, kept next to the enum.
 // ============================================================================
 

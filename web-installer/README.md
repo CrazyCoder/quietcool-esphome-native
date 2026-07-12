@@ -9,8 +9,10 @@
 > nothing to build or host. The rest of this document covers self-hosting and the internals.
 
 A single-page wizard that flashes custom ESPHome firmware onto a QuietCool
-IT-AF-SMT hub — no UART, no attic crawl, no APK sideload. It has two independent
-paths, picked by where the hub is in its lifecycle:
+IT-AF-SMT hub — no UART or APK sideload. A previously paired hub still needs
+either its existing pair ID or physical KEY2 access to authorize a new client.
+The installer has two independent paths, picked by where the hub is in its
+lifecycle:
 
 1. **Web BLE flow (sections 1–6 on the page).** Flashes the custom ESPHome
    firmware onto a hub still running the stock OEM firmware. Open the page in a Web
@@ -24,8 +26,10 @@ paths, picked by where the hub is in its lifecycle:
    already running the ESPHome firmware. It calls the device's built-in
    `POST /api/flash_url` endpoint, provided by the `http_flash_handler` component
    in [`../components/http_flash_handler/`](../components/http_flash_handler/)
-   (which ships host-side validation tests). Use it to roll back to OEM V4.1, push
-   a custom build, or test alternative firmware without touching BLE.
+   (which ships host-side validation tests). Use it to roll back to the verified
+   OEM V4.1 image, push a custom build, or test alternative firmware without
+   touching BLE. The known OEM URL+MD5 pair automatically gets the stock-specific
+   slot confirmation and NVS cleanup needed for the restore to stick.
 
 ## Layout
 
@@ -69,13 +73,12 @@ reflash. The OEM `Upgrade` command over BLE deliberately refuses OEM firmware
 domains, so it can't be used to flash stock over an ESPHome hub — that's why
 rollback goes through the HTTP path, not BLE.
 
-Factory restore via this page rewrites only the app partition, not NVS. **BLE pairings
-still reset, though:** once a hub has run the ESPHome firmware, reverting it to stock
-leaves the previous pair-ids no longer authenticating (`Login` → `Fail`), so you must
-re-pair (KEY2 long-hold + the OEM app) before BLE control works again. Other NVS data
-(Smart Mode thresholds, presets) isn't wiped by the OTA, but whether stock reads it back
-cleanly after this firmware has managed the `hx_list` namespace is unverified. A real
-reset-to-defaults still requires the KEY1 5-second long-hold on the hub.
+Factory restore via this page rewrites only the app partition and erases only the
+private `esphome` NVS namespace during final shutdown. The OEM `hx_list` namespace
+is preserved, including BLE pair IDs, Smart Mode thresholds, presets, timer defaults,
+and fan metadata. Pairing and settings persistence across this corrected path still
+needs live hardware verification. A real reset-to-defaults still requires the KEY1
+5-second long-hold on the hub and intentionally wipes the whole NVS partition.
 
 ### Path 2: HTTP flash (any URL onto an ESPHome-running hub)
 
@@ -88,8 +91,10 @@ and works after the firmware is installed. Inputs:
 - **Firmware URL** — any `http://` or `https://` URL the hub's Wi-Fi can reach. The
   hub fetches the bin itself, not your phone.
 - **MD5 (optional)** — 32 hex chars. If supplied, the device validates the
-  downloaded bin and aborts before writing on mismatch. A **Pre-fill OEM V4.1**
-  button drops the OEM CDN URL + verified MD5 in one click.
+  downloaded bin and aborts before writing on mismatch; if omitted, it fetches
+  `<firmware-url>.md5`. A **Pre-fill OEM V4.1** button drops the exact OEM CDN
+  URL + verified MD5 in one click. Both values are required for the endpoint to
+  recognize and safely finalize a stock restore.
 
 **Partition layout requirement.** The hub's flash uses the OEM IT-AF-SMT layout:
 `nvs` @ `0x9000`, `otadata` @ `0xd000`, `phy_init` @ `0xf000`, `coredump` @
@@ -110,12 +115,16 @@ image. Examples:
 When in doubt, build your custom firmware from this project (which already wires
 `partitions: ./partitions.csv`) — that guarantees compatibility.
 
-The page POSTs `http://<host>/api/flash_url?url=…&md5=…` (no body, no custom
+The page POSTs `http://<host>/api/flash_url?url=…&md5=…` (an empty body, no custom
 headers — so no CORS preflight is required for the simple case). The device's
 `http_flash_handler` responds `200 OK` ("Accepted") immediately, then ~500 ms later starts
 the OTA — pulls the bin, writes to the inactive OTA slot, reboots into it. The
-running slot can never be overwritten (ESP-IDF guarantees this) so the previous
-firmware survives in the other slot for one-OTA rollback.
+running slot can never be overwritten (ESP-IDF guarantees this), so the previous
+firmware remains in the other slot. Ordinary custom images retain ESP-IDF's normal
+app-rollback protection. For the exact verified OEM V4.1 URL+MD5 pair, the handler
+marks the stock slot VALID before reboot because stock cannot self-confirm under this
+build's rollback-enabled bootloader; automatic rollback is deliberately disabled for
+that explicit restore.
 
 **Mixed-content gotcha:** if you're loading this page over HTTPS (e.g.
 `https://<user>.github.io/<repo>/`) and the device serves `http://`, modern
@@ -151,15 +160,14 @@ credential-free (`dist`) firmware, stages `firmware.ota.bin` + an `.md5` next to
 `index.html`, and deploys this folder. GitHub Pages' certificate is trusted by
 ESP-IDF's CA bundle, so the hub's own HTTPS download of the firmware bin works too.
 
-**Redeploy after changing the firmware or the page.** The workflow runs on manual
-dispatch — rebuild and republish with:
+**Redeploy after changing the firmware or the page.** Every push to `main`
+automatically runs the workflow. To rebuild and republish manually:
 
 ```sh
 gh workflow run "Deploy Web installer"
 ```
 
-or the **Actions → Deploy Web installer → Run workflow** button. To make every push to
-`main` redeploy automatically, uncomment the `push:` trigger in the workflow.
+or use the **Actions → Deploy Web installer → Run workflow** button.
 
 **Self-hosting elsewhere.** The installer is a static site — serve the `web-installer/`
 folder from any host with a public-CA HTTPS cert (Cloudflare Pages, Netlify, your own
@@ -192,9 +200,10 @@ are not.
    paired (e.g. via the OEM Android app), the wizard re-pairs with a fresh random
    UUID first, then logs in with that. A disconnect/reconnect is required between
    Pair and Login because the V2 firmware commits pair state only on disconnect.
-5. **If the firmware fails to boot, the OEM bootloader falls back to the other OTA
-   slot** (whatever was active before this flash). A UART reflash of a known-good
-   image is the last resort.
+5. **Ordinary custom images keep ESP-IDF app rollback.** If one fails validation
+   after boot, the bootloader can fall back to the previous OTA slot. The exact
+   verified OEM restore is deliberately marked VALID so stock stays installed;
+   if that known image unexpectedly fails to boot, UART is the recovery path.
 
 ## Protocol reference
 

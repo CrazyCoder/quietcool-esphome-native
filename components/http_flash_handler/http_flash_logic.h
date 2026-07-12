@@ -33,6 +33,13 @@ enum class FlashRequestStatus : uint8_t {
 
 class HttpFlashLogic {
  public:
+  // Byte-perfect OEM V4.1 image offered by the Web Installer's stock-restore
+  // preset. Keep these in sync with web-installer/app.js and the HA restore
+  // action in quietcool-atticfan.yaml.
+  static constexpr std::string_view OEM_V41_URL =
+      "http://myquietcool.com/profile/upload/2025/11/18/IT-BLT-ATTICFAN_V4.1_20251118010357A008.bin";
+  static constexpr std::string_view OEM_V41_MD5 = "36d2e90dcfdd553272fc4eebdc3c4444";
+
   // Strip ASCII whitespace (space, tab, CR, LF, VT, FF) from both ends.
   static std::string trim(std::string_view s) {
     size_t start = 0;
@@ -76,6 +83,18 @@ class HttpFlashLogic {
       case FlashRequestStatus::InvalidMd5Characters: return "MD5 must contain only hex characters (0-9, a-f, A-F)";
     }
     return "Invalid flash request";
+  }
+
+  // Only this exact, independently-verified URL+digest pair gets foreign-app
+  // finalization (slot confirmation + ESPHome-namespace cleanup). All other
+  // HTTP flashes retain ordinary app rollback behavior. Inputs are expected to
+  // be validate()'s trimmed outputs; MD5 comparison is case-insensitive.
+  static bool is_known_stock_restore(std::string_view url, std::string_view md5) {
+    if (url != OEM_V41_URL || md5.size() != OEM_V41_MD5.size()) return false;
+    for (size_t i = 0; i < md5.size(); ++i) {
+      if (to_lower_(md5[i]) != OEM_V41_MD5[i]) return false;
+    }
+    return true;
   }
 
  private:

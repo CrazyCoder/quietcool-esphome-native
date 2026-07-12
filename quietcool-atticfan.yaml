@@ -546,15 +546,17 @@ button:
   # Stock-firmware restore. Pulls the byte-perfect OEM V4.1 bin from
   # QuietCool's CDN, writes it to the INACTIVE OTA slot via esp_ota_*, and
   # reboots into it. The running slot cannot be overwritten (ESP-IDF
-  # guarantees this) so the previous ESPHome firmware survives in the other
-  # slot for one-OTA rollback if needed.
+  # guarantees this) so the previous ESPHome firmware remains physically in
+  # the other slot. Automatic rollback is deliberately disabled for this
+  # explicit foreign-firmware restore; stock cannot self-confirm itself.
   #
   # IMPORTANT: this firmware is built with ESP-IDF app-rollback enabled
   # (CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y). Stock firmware never calls
   # esp_ota_mark_app_valid_cancel_rollback(), so the bootloader would boot it
   # once in pending-verify state and REVERT to us on the next reset. To make
-  # the restore stick, we arm id(http_flasher).request_rollback_confirm()
-  # before flashing — it marks the freshly-written stock slot VALID at
+  # the restore stick, we arm
+  # id(http_flasher).request_stock_restore_finalize() before flashing — it
+  # marks the freshly-written stock slot VALID at
   # OTA_COMPLETED (just before reboot). Rollback stays enabled for every other
   # OTA path; only this deliberate foreign-firmware flash opts out.
   #

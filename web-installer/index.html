@@ -235,7 +235,7 @@
 
   <div class="card" id="card-esphome-flash">
     <h2>Already running the ESPHome firmware?</h2>
-    <p class="muted">If your hub is <strong>already running the ESPHome firmware</strong>, use this section to flash any firmware URL onto it: the OEM stock <code>V4.1</code> to roll back, a custom build hosted somewhere, an alternative ESPHome image, anything. It uses the device's built-in <code>POST /api/flash_url</code> endpoint over plain HTTP, no Bluetooth required.</p>
+    <p class="muted">If your hub is <strong>already running the ESPHome firmware</strong>, use this section to flash any compatible firmware URL onto it: the verified OEM stock <code>V4.1</code> to roll back, a custom build hosted somewhere, or an alternative ESPHome image. It uses the device's built-in <code>POST /api/flash_url</code> endpoint over plain HTTP, no Bluetooth required. The OEM preset supplies the exact verified URL+MD5 pair that tells the device to confirm the foreign stock slot and preserve OEM NVS state during final cleanup.</p>
     <p class="muted">The ESPHome firmware still speaks OEM BLE (the stock QuietCool Smart Control app keeps pairing and controlling it), but its <code>Upgrade</code> command deliberately <strong>blocks QuietCool's firmware domains</strong> — so the Web-BLE flow above can't push the stock bin back over Bluetooth. This HTTP path reaches the device directly and isn't subject to that.</p>
 
     <label for="esphome-host">Device hostname or IP</label>
@@ -245,10 +245,10 @@
     <label for="esphome-url">Firmware URL (.bin)</label>
     <input id="esphome-url" type="url" placeholder="https://..." autocomplete="off" autocapitalize="off" spellcheck="false">
     <p class="muted">Must start with <code>http://</code> or <code>https://</code>. The hub fetches this URL over its own Wi-Fi — not through the device running this page.</p>
-    <div class="callout"><strong>Partition layout matters</strong> — only firmwares built for the OEM IT-AF-SMT layout will flash here (OTA slots at <code>0x20000</code> and <code>0x200000</code>, 1.875 MB each). Safe to flash: the OEM bins from <code>myquietcool.com</code>, this project's own builds (preserve the OEM layout via <code>partitions.csv</code>), and forks that ship the same <code>partitions.csv</code>. Will fail or brick-then-rollback: stock ESPHome builds with the default 4 MB partition layout (different OTA addresses + slot sizes). If a flash succeeds but the device never reappears, power-cycle — ESP-IDF will roll back to the previous firmware in the other slot.</div>
+    <div class="callout"><strong>Partition layout matters</strong> — only firmwares built for the OEM IT-AF-SMT layout will flash here (OTA slots at <code>0x20000</code> and <code>0x200000</code>, 1.875 MB each). Safe to flash: the verified OEM V4.1 preset, this project's own builds (preserve the OEM layout via <code>partitions.csv</code>), and forks that ship the same <code>partitions.csv</code>. Stock ESPHome builds with the default 4 MB partition layout have different OTA addresses and slot sizes; they may refuse to write or fail to boot. Ordinary custom images keep app rollback, but the exact verified OEM restore is marked valid deliberately so it stays stock.</div>
 
     <label for="esphome-md5">MD5 (optional, 32 hex chars)</label>
-    <input id="esphome-md5" type="text" placeholder="leave empty to skip integrity check" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="32">
+    <input id="esphome-md5" type="text" placeholder="optional; empty fetches &lt;url&gt;.md5" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="32">
     <p class="muted">If supplied, the OTA aborts before writing if the downloaded bin's MD5 doesn't match — a cheap safety net against the wrong file landing in flash.</p>
 
     <div class="row" style="margin-top:12px">
@@ -259,14 +259,14 @@
 
     <details>
       <summary>How does this work? / troubleshooting</summary>
-      <p class="muted">The button issues a single <code>POST http://&lt;host&gt;/api/flash_url?url=…&amp;md5=…</code> to the device. The device's <code>http_flash_handler</code> component validates the URL+MD5, returns <code>200 OK</code> (body “Accepted…”) immediately, then ~500 ms later kicks off the <code>ota.http_request</code> OTA — pulls the bin, writes it to the inactive OTA slot, reboots. The currently-running firmware can never be overwritten (ESP-IDF guarantees this), so the previous bin stays in the other slot for one-OTA rollback if needed.</p>
+      <p class="muted">The button issues a single <code>POST http://&lt;host&gt;/api/flash_url?url=…&amp;md5=…</code> to the device. The device's <code>http_flash_handler</code> component validates the URL+MD5, returns <code>200 OK</code> (body “Accepted…”) immediately, then ~500 ms later kicks off the <code>ota.http_request</code> OTA — pulls the bin, writes it to the inactive OTA slot, and reboots. Ordinary custom images retain normal app-rollback protection. The exact OEM V4.1 URL+MD5 preset instead marks stock VALID before reboot so it stays installed, erases only ESPHome's private NVS namespace, and preserves OEM pairings and settings.</p>
       <p class="muted"><strong>No auth on this endpoint</strong> — matches the device's LAN-trust default (api/ota are also passwordless before Home Assistant adoption pushes per-device secrets). To lock it down, add <code>auth: { username, password }</code> under <code>web_server:</code> in your build.</p>
       <p class="muted"><strong>Common failure modes:</strong></p>
       <ul class="step-list muted">
         <li>"Network error" → device hostname doesn't resolve; try the LAN IP instead. The full mDNS name is required, including the MAC suffix (e.g. <code>quietcool-atticfan-abcdef.local</code>, not just <code>quietcool-atticfan</code>).</li>
         <li>"404 Not Found" → device firmware doesn't have <code>web_server</code> + <code>http_flash_handler</code> wired. Re-flash with a current build that includes them.</li>
         <li><strong>500</strong> with a validation message (e.g. "Missing or empty 'url' parameter", "MD5 must be exactly 32 hex characters") → the device rejected the request; the reason is in the response body. ESPHome's IDF web backend surfaces the handler's validation errors as 500. The form pre-checks the URL and MD5, so you'll normally see the reason inline before anything is sent.</li>
-        <li>POST succeeds but device doesn't come back → check the device's UART/logger output. The OTA may have failed mid-flash; ESP-IDF rollback will boot the previous firmware on next reset. Just power-cycle.</li>
+        <li>POST succeeds but device doesn't come back → check the device's UART/logger output. Ordinary custom images retain ESP-IDF rollback and should boot the previous firmware after a power-cycle. The verified OEM restore is deliberately marked valid so it stays stock; use UART recovery if that known image unexpectedly fails to boot.</li>
       </ul>
     </details>
   </div>

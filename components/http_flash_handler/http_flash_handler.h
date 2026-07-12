@@ -36,7 +36,8 @@ class HttpFlashHandler : public Component, public ota::OTAStateListener {
   // Called from the AsyncWebHandler subclass when a valid request lands.
   // Schedules the flash for ~500ms in the future so the HTTP 200 response
   // has time to flush before the OTA reboots the device.
-  void schedule_flash(const std::string &url, const std::string &md5);
+  void schedule_flash(const std::string &url, const std::string &md5,
+                      bool stock_restore = false);
 
   // Arm a one-shot: when the NEXT OTA on the wired http_request component
   // completes, mark the freshly-written slot VALID before the reboot. This is

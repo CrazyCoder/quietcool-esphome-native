@@ -48,14 +48,16 @@ class FlashUrlHandler : public AsyncWebHandler {
       return;
     }
 
-    ESP_LOGW(TAG, "HTTP flash accepted: url='%s' md5='%s' — fan will reboot",
-             url_t.c_str(), md5_t.empty() ? "<url>.md5" : md5_t.c_str());
+    const bool stock_restore = qc::HttpFlashLogic::is_known_stock_restore(url_t, md5_t);
+    ESP_LOGW(TAG, "HTTP flash accepted: url='%s' md5='%s' stock_restore=%s — fan will reboot",
+             url_t.c_str(), md5_t.empty() ? "<url>.md5" : md5_t.c_str(),
+             stock_restore ? "yes" : "no");
 
     // 200, not 202: the IDF backend renders unmapped codes as 500, which would
     // make a successful flash look like a server error to the caller.
     r->send(200, "text/plain", "Accepted - downloading firmware, device will reboot");
 
-    parent_->schedule_flash(url_t, md5_t);
+    parent_->schedule_flash(url_t, md5_t, stock_restore);
   }
 
  private:
@@ -71,8 +73,8 @@ void HttpFlashHandler::setup() {
     ESP_LOGE(TAG, "ota.http_request component not wired — HTTP flash endpoint unavailable");
     return;
   }
-  // Listen for OTA completion so request_rollback_confirm() can mark a
-  // foreign-firmware slot valid before the reboot (see on_ota_state).
+  // Listen for OTA completion so request_stock_restore_finalize() can mark a
+  // known foreign-firmware slot valid before the reboot (see on_ota_state).
   ota_->add_state_listener(this);
   web_server_base::global_web_server_base->add_handler(new FlashUrlHandler(this));
   ESP_LOGCONFIG(TAG, "Registered POST /api/flash_url");
@@ -144,9 +146,13 @@ void HttpFlashHandler::dump_config() {
   ESP_LOGCONFIG(TAG, "  ota.http_request: %s", ota_ ? "OK" : "MISSING");
 }
 
-void HttpFlashHandler::schedule_flash(const std::string &url, const std::string &md5) {
-  // Capture url+md5 by value — the request object is gone by the time this fires.
-  this->set_timeout("flash", 500, [this, url, md5]() {
+void HttpFlashHandler::schedule_flash(const std::string &url, const std::string &md5,
+                                      bool stock_restore) {
+  // Capture all request state by value — the request object is gone by the
+  // time this fires. Arm stock finalization inside the scheduled callback so a
+  // newer request replacing this named timeout cannot inherit a stale flag.
+  this->set_timeout("flash", 500, [this, url, md5, stock_restore]() {
+    if (stock_restore) this->request_stock_restore_finalize();
     ota_->set_url(url);
     // ota.http_request mandates a checksum (no true skip). An explicit md5 wins;
     // otherwise fetch it from the companion "<url>.md5" file the host serves.

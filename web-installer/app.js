@@ -535,7 +535,7 @@ function validateHttpFlashInputs(host, url, md5) {
   if (!host) return "Device hostname required";
   if (!url) return "Firmware URL required";
   if (!/^https?:\/\//i.test(url)) return "URL must start with http:// or https://";
-  if (md5 && !/^[0-9a-f]{32}$/i.test(md5)) return "MD5 must be exactly 32 hex chars (or empty to skip)";
+  if (md5 && !/^[0-9a-f]{32}$/i.test(md5)) return "MD5 must be exactly 32 hex chars (or empty to fetch <url>.md5)";
   return null;
 }
 
@@ -571,10 +571,16 @@ async function runEsphomeHttpFlash() {
     const body = (await resp.text()).trim();
 
     if (resp.ok) {
+      const isStockRestore = url === OEM_RESTORE_URL &&
+        md5.toLowerCase() === OEM_RESTORE_MD5;
+      const completionNote = isStockRestore
+        ? `The device is downloading the verified stock image. Its slot will be marked valid before reboot; ` +
+          `OEM pairings and settings are preserved. It should return as an ATTICFAN Bluetooth device after the OTA completes.`
+        : `Device is downloading the new firmware and will reboot after the OTA completes. ` +
+          `If it never reappears, ESP-IDF rollback should boot the previous firmware on the next power cycle.`;
       status.innerHTML =
         `<span class="pill ok">${resp.status}</span> ${escapeHtml(body)}<br>` +
-        `<small class="muted">Device will reboot in ~5 s, download the new firmware, then come back online in ~30 s. ` +
-        `If it never reappears, ESP-IDF rollback should boot the previous firmware on the next power cycle.</small>`;
+        `<small class="muted">${completionNote}</small>`;
       status.className = "ok";
       // Remember the hostname for next time.
       try { localStorage.setItem("qc_esphome_host", host); } catch (e) {}

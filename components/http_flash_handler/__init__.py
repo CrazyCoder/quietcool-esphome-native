@@ -31,7 +31,7 @@ async def to_code(config):
     cg.add(var.set_ota_component(ota))
     # We register an OTA state listener on the http_request component so we can
     # mark a freshly-flashed FOREIGN-firmware slot valid before the reboot (see
-    # request_rollback_confirm / on_ota_state). The listener API + the
+    # request_stock_restore_finalize / on_ota_state). The listener API + the
     # notify_state_() calls in the http_request OTA are both gated behind this
     # define, and nothing else in this config turns it on, so declare it here.
     cg.add_define("USE_OTA_STATE_LISTENER")
