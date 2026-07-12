@@ -463,32 +463,36 @@ async function runFlashFlow() {
       log.ok("Already logged in via diagnostic probe — skipping Login.");
     }
 
-    // Step 2: SetRouter — buffer Wi-Fi creds.
+    // Step 2: Upgrade — buffer the OTA URL. MUST precede SetRouter.
+    //   V2 (V4.1+):  {A:10, U:<url>}
+    //   V1 (pre-3.9): {Api:"Upgrade", URL:<url>}
+    // Upgrade must precede SetRouter on stock V4.1: SetRouter (A=11) *spawns* the
+    // OTA download task, and that task reads the URL global that Upgrade (A=10)
+    // buffers. Send SetRouter first and the task launches with an EMPTY URL →
+    // "Failed to initialise HTTP connection" → abort + reboot, and the later
+    // Upgrade is then rejected with {}. Sent first, Upgrade stores the URL and
+    // returns {"A":10,"F":"TRUE"}.
+    // (V1 Upgrade is a stub on V4.1 that returns {}; on true V1-only firmware it works.)
+    setProgress(50, "Sending OTA URL…");
+    const upPayload = useV2Dialect
+        ? { A: 10, U: url }
+        : { Api: "Upgrade", URL: url };
+    const upResp = await sendCommand(upPayload);
+    if (!resultOk(upResp)) throw new Error("Upgrade rejected: " + JSON.stringify(upResp)
+        + " — on stock V4.1 an empty {} here means SetRouter was sent before Upgrade.");
+    log.ok("OTA URL buffered.");
+
+    // Step 3: SetRouter — set Wi-Fi creds; this SPAWNS the OTA download task,
+    // which now finds the URL buffered in Step 2.
     //   V2 (V4.1+):  {A:11, S:<ssid>, P:<password>}
     //   V1 (pre-3.9): {Api:"SetRouter", Ssid:<ssid>, Password:<password>}
-    // Order Login -> SetRouter -> Upgrade matches the OEM Android app, which
-    // runs the upgrade only after the Wi-Fi (SetRouter) step is confirmed.
-    // Upgrade (A=10) is the actual OTA trigger.
-    setProgress(50, "Sending Wi-Fi creds…");
+    setProgress(75, "Sending Wi-Fi creds (triggers download)…");
     const srPayload = useV2Dialect
         ? { A: 11, S: ssid, P: pwd }
         : { Api: "SetRouter", Ssid: ssid, Password: pwd };
     const srResp = await sendCommand(srPayload, { timeoutMs: 8000 });
     if (!resultOk(srResp)) throw new Error("SetRouter rejected: " + JSON.stringify(srResp));
-    log.ok("Wi-Fi creds buffered.");
-
-    // Step 3: buffer the OTA URL + trigger.
-    //   V2 (V4.1+):  {A:10, U:<url>}
-    //   V1 (pre-3.9): {Api:"Upgrade", URL:<url>}
-    // V1 Upgrade is a stub on V4.1 (returns {}); that's why we prefer V2
-    // when supported. On true V1-only firmware, V1 Upgrade does work.
-    setProgress(75, "Sending OTA URL (triggers download)…");
-    const upPayload = useV2Dialect
-        ? { A: 10, U: url }
-        : { Api: "Upgrade", URL: url };
-    const upResp = await sendCommand(upPayload);
-    if (!resultOk(upResp)) throw new Error("Upgrade rejected: " + JSON.stringify(upResp));
-    log.ok("Upgrade ACK. Hub is now connecting to Wi-Fi and downloading.");
+    log.ok("Wi-Fi creds set — hub is now connecting to Wi-Fi and downloading.");
 
     setProgress(95, "Hub flashing. Will disconnect shortly.");
     // Optional: try a couple of GetUpgradeState polls. May or may not succeed depending

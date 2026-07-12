@@ -590,6 +590,12 @@ URL and Wi-Fi credentials. **`SetRouter` is the actual trigger**: after it has b
 URL (from `Upgrade`) and the Wi-Fi creds, the hub joins Wi-Fi, downloads the image, and
 writes it to the inactive OTA slot.
 
+> **`Upgrade` MUST precede `SetRouter`.** `SetRouter` *spawns*
+> the download task, which reads the URL global that `Upgrade` populates. Send `SetRouter`
+> first and the task launches with an **empty URL**, fails to initialise its HTTP client,
+> and resets. Once that task is running, a follow-up `Upgrade` is **rejected with a bare
+> `{}`** — sent in the right order it stores the URL and returns `{A:10,"F":"TRUE"}`.
+
 ### Upgrade (A=10)
 
 ```jsonc
@@ -615,9 +621,9 @@ relays for safety first).
 1. Join Wi-Fi (2 s timeout).
 2. Open the HTTP connection (up to 30 retries).
 3. Stream the image in 255-byte chunks into the inactive OTA slot.
-4. Mark the new slot bootable. The hub does **not** auto-reboot — the new image boots on
-   the next power cycle (standard ESP-IDF A/B semantics), so the previous firmware
-   remains in the other slot for rollback.
+4. Mark the new slot bootable and **reboot into it** (a failed transfer also ends in a
+   reset). Standard ESP-IDF A/B semantics leave the previous firmware in the other slot
+   for rollback.
 
 **Security:** the stock OTA uses **plain HTTP with no TLS, no signature check, and no
 content-length/status sanity check** — a 404 body would be written to flash. Anything
@@ -689,9 +695,12 @@ graphs.
 - **`GetRouter` returns the Wi-Fi password in cleartext** over BLE, and `SetRouter`
   transmits it in cleartext (an OEM trait — acceptable for a one-shot bootstrap over
   ~10 m BLE, not for repeated use).
+- **Send `Upgrade` before `SetRouter` for an OTA** (see [§9](#9-firmware-update-ota-flow)).
+  `SetRouter` spawns the download task with whatever URL `Upgrade` has already buffered;
+  reversed, the task gets an empty URL, fails to init the HTTP client, and resets — and a
+  late `Upgrade` returns a bare `{}`.
 - **Once an OTA starts, only `GetUpgradeState` is answered**; all other commands are
-  gated until reboot. If you send `SetRouter` without a prior `Upgrade`, a stock hub can
-  get stuck in this gated state until power-cycled.
+  gated until reboot.
 - **`Reset` acks before wiping** — the `{A:22,"F":"TRUE"}` response is sent, then NVS is
   wiped and the hub reboots.
 - **No auth-mode field for Wi-Fi.** `SetRouter` carries only SSID + password; the hub

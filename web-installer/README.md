@@ -194,17 +194,17 @@ are not.
 
 ## Protocol reference
 
-**V2 uses single-character JSON input field names** — not V1's verbose
-`"PhoneID"`/`"URL"`/`"Ssid"`/`"Password"`. The V4.1 V2 parser silently fails
-(returns the default Fail string) if you send V1-style names inside a V2 numeric
-envelope.
+> The full BLE wire protocol — framing, the V1/V2 dialects, the auth/pair-state machine,
+> every command, the quirks, and the OTA flow — is documented in
+> **[`../docs/OEM-BLE-PROTOCOL.md`](../docs/OEM-BLE-PROTOCOL.md)**. This section covers only
+> what the installer needs.
 
-The V2 dispatcher reads `pair_state` from the session state and **rejects every
-command except Login and Pair when `pair_state != 1`**. Login (A=13) is pre-gate
-and always allowed. Pair (A=14) is also pre-gate but only fires when
-`pair_state == 2`. PairMode (A=15) and everything else are behind the
-`pair_state == 1` gate, so they can't be used to bootstrap a never-logged-in
-session.
+The installer speaks V2 (single-character JSON field names) once a hub's Login response
+shows it is V4.1+, and falls back to V1 for older firmware. Every command except `Login`
+and `Pair` is gated behind an authenticated session (`pair_state == 1`), so it
+authenticates first, then flashes. **The flash step is `Upgrade` then `SetRouter`, in that
+order** — on stock firmware `SetRouter` spawns the download task, which reads the URL that
+`Upgrade` buffered, so `Upgrade` must come first.
 
 Two auth modes:
 
@@ -238,29 +238,20 @@ Either way, the subsequent flow is:
 
 ### Protocol gotchas
 
-1. **V2 input fields are single-character.** Guessing V2 field names by analogy
-   with V1's verbose names does not work. The actual mapping: Login/Pair use `"P"`
-   for pair-id; Upgrade uses `"U"` for URL; SetRouter uses `"S"` for SSID and `"P"`
-   for password (yes, `"P"` is reused for different meanings per command — that's
-   fine because `A=` disambiguates).
-2. **The factory test pair-id `"1234567dsad8wqw9asasd"` is NVS-only, not
-   hardcoded.** It's a factory-shipped NVS entry that gets overwritten the first
-   time a real phone calls Pair. On a previously-paired hub, it doesn't work for
-   Login regardless of protocol version.
-3. **The `pair_num` NVS counter is monotonic and capped at 50** — and there's no
-   BLE-exposed way to reset it. Only KEY1 5-second long-hold (`Clear_All_Pair` in
-   firmware) clears the whole `hx_list` namespace.
-4. **Generate 16-char pair-ids, not 32-char.** The OEM convention is 16 hex chars.
-   The length check in the handler is `<101`, so 32 chars should work — but matching
-   the OEM convention sidesteps any tighter buffer-size constraint.
-5. **Power-cycle resets `pair_state` (RAM) but not `pair_num` (flash NVS).** If
-   you're debugging by power-cycling, re-trigger pair mode each time, and don't
-   expect any persistent NVS state to change.
+The [protocol doc](../docs/OEM-BLE-PROTOCOL.md) covers these in full; the ones that bite
+during a flash:
 
-BLE specifics: service UUID `000000ff-0000-1000-8000-00805f9b34fb`, characteristic
-UUID `0000ff01-0000-1000-8000-00805f9b34fb` (write + notify). Responses are prefixed
-with literal ASCII `QQ` before the JSON — the page strips this by finding the first
-`{`. Writes are chunked at 20 bytes per packet to match the BLE 4.2 default MTU.
+- **V2 field names are single characters** — Login/Pair `"P"` (pair-id), Upgrade `"U"`
+  (URL), SetRouter `"S"`/`"P"` (SSID/password). Sending V1-style names in a V2 envelope
+  silently fails.
+- **Generate 16-char hex pair-ids** (the OEM convention), not 32.
+- **The factory test pair-id `1234567dsad8wqw9asasd` only works on never-paired hubs** —
+  once a hub has been paired it's overwritten; pair anew or use the real id.
+- **The pair counter is capped at 50** and only a KEY1 5-second long-hold clears it.
+
+BLE service `000000ff-0000-1000-8000-00805f9b34fb`, characteristic
+`0000ff01-0000-1000-8000-00805f9b34fb` (write + notify); responses carry a leading `QQ`
+before the JSON (strip to the first `{`); writes are chunked at 20 bytes.
 
 ## Finding the existing pair-id on a paired hub
 
