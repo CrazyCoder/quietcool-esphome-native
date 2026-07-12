@@ -60,9 +60,9 @@ TEST("validate_phone_id: 101 chars → false") {
   REQUIRE(!validate_phone_id(std::string(101, 'x')));
 }
 
-TEST("GetVersion reports OEM V4.3 to suppress replacement-firmware prompts") {
+TEST("GetVersion exactly matches the OEM production channel") {
   REQUIRE_EQ(std::string(get_version_response()),
-             std::string(R"({"A":3,"V":"IT-BLT-ATTICFAN_V4.3","P":100,"D":"2026.04.30","M":"online","H":"A"})"));
+             std::string(R"({"A":3,"V":"IT-BLT-ATTICFAN_V4.1","P":100,"D":"2025.11.18","M":"online","H":"A"})"));
 }
 
 // ============================================================================

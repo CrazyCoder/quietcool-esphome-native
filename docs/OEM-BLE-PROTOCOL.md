@@ -324,10 +324,17 @@ updates, and branch-displacement churn; no isolable semantic firmware change was
 found. The Android app itself has one `>= 4.2` check that changes OTA progress-bar
 rendering, but that is cosmetic app behavior rather than a hub capability.
 
-Accordingly, this compatibility implementation answers `GetVersion` with
-`IT-BLT-ATTICFAN_V4.3` and date `2026.04.30`. This is deliberately an OEM
-compatibility claim, separate from the ESPHome project's own release version: it
-prevents the Smart Control app from repeatedly offering replacement OEM firmware.
+The Smart Control app does not perform a newer-than comparison. Its update screen
+increments the available-update count whenever
+`BigDecimal(deviceVersion).compareTo(BigDecimal(channelVersion)) != 0`. Consequently,
+a device reporting V4.3 is incorrectly offered the production channel's older V4.1
+image because `4.3 != 4.1`. This was confirmed live against the app on 2026-07-12.
+
+This compatibility implementation therefore answers `GetVersion` with the
+production channel's exact `IT-BLT-ATTICFAN_V4.1` and date `2025.11.18`. This is
+deliberately an OEM compatibility identity, separate from the ESPHome project's own
+release version. It must track the channel selected by the app, not the highest OEM
+version number. Users on QC or engineering app channels may still see V4.3 offered.
 
 ### 5.6 GetRouter (A=4)
 

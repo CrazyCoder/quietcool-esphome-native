@@ -823,10 +823,10 @@ std::string OemBleCompat::handle_get_parameter_() {
 }
 
 // A=3 GetVersion
-// Report the latest OEM firmware version so the Smart Control app's update check
-// (device-version != cloud-version => "update available") sees us as current and
-// stops nagging. Bump this to match QuietCool's newest published version whenever
-// they release one. Our firmware is feature-equivalent regardless of this string.
+// Report the production channel's exact OEM firmware version so the Smart Control
+// app's broken inequality check (device-version != cloud-version => "update
+// available") sees us as current and stops nagging. Our firmware is
+// feature-equivalent regardless of this compatibility string.
 std::string OemBleCompat::handle_get_version_() {
   return ::qc::get_version_response();
 }
