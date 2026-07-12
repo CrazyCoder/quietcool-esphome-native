@@ -1,5 +1,5 @@
 # OEM BLE compatibility component — reimplements the stock QuietCool V2 BLE
-# protocol so the OEM Android app can discover, pair with, and control our
+# protocol so the OEM Smart Control app can discover, pair with, and control our
 # ESPHome firmware. Runtime-toggleable via an HA switch.
 #
 # Pure decision logic in oem_ble_compat_logic.h; tests in test/.

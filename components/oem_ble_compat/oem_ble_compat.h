@@ -1,5 +1,5 @@
 // OEM BLE compatibility component — reimplements the stock QuietCool V2 BLE
-// protocol so the OEM Android app can discover, pair, and control our ESPHome
+// protocol so the OEM Smart Control app can discover, pair, and control our ESPHome
 // firmware exactly like stock. Single GATT service (000000ff-...) with one
 // characteristic (0000ff01-..., write+notify). Runtime-toggleable via HA switch.
 

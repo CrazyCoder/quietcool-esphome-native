@@ -3,7 +3,7 @@
 A complete, independent description of the Bluetooth Low Energy protocol spoken by
 the stock **QuietCool IT-AF-SMT Smart Attic Fan Control** hub (the ESP32 firmware
 branded `IT-BLT-ATTICFAN`), recovered by reverse-engineering the OEM firmware image,
-the OEM Android app, and live BLE captures.
+the analyzed Android build of the OEM Smart Control app, and live BLE captures.
 
 This document exists for two audiences:
 
@@ -138,8 +138,9 @@ On V4.1 firmware the V1 named dispatcher is a thin legacy shim — it recognizes
 (`{"Api":"GetWorkState"}`, `{"Api":"SetMode",…}`, etc.) falls through with **no handler
 and an empty response**.
 
-The reason V1 ever appeared to work fully is that **the OEM Android app converts V1 →
-V2 before writing to BLE**: its code constructs `{"Api":"GetWorkState"}` but a
+The reason V1 ever appeared to work fully is that **the analyzed Android build of
+the OEM app converts V1 → V2 before writing to BLE**: its code constructs
+`{"Api":"GetWorkState"}` but a
 serialization layer rewrites it to `{"A":1}` on the wire. So in practice, on V4.1+:
 **send V2 numeric for everything**, and treat V1 `Login`/`Pair`/`SetSpeed` only as
 convenient aliases.
@@ -787,5 +788,6 @@ much of V1 and (later) V2:
   Assistant integration speaking this protocol over BLE.
 
 This document consolidates and corrects those findings against the V4.1 firmware image,
-the OEM Android app, and live captures, and documents the two binary commands and the
-full V2 field-name map that the earlier clients did not have.
+the analyzed Android build of the OEM Smart Control app, and live captures, and
+documents the two binary commands and the full V2 field-name map that the earlier
+clients did not have.

@@ -6,6 +6,6 @@
   "notes": [
     "Custom ESPHome replacement firmware for the QuietCool IT-AF-SMT hub.",
     "Host the credential-free (dist) build here: it onboards Wi-Fi via Improv-BLE, so the hosted image carries no secrets.",
-    "OEM partition layout preserved; OEM rollback via the OEM Android app remains a valid recovery path."
+    "OEM partition layout and Smart Control app compatibility are preserved; verified OEM restore is available from the installer."
   ]
 }

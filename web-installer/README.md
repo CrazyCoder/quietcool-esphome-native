@@ -60,7 +60,8 @@ OEM OTA mechanism — only the firmware URL changes.
   directory as `index.html`.
 - **Restore OEM factory firmware** — defaults to the OEM `IT-BLT-ATTICFAN_V4.1`
   bin on QuietCool's CDN (`http://myquietcool.com/.../IT-BLT-ATTICFAN_V4.1_*.bin`),
-  which is byte-for-byte what the OEM Android app would flash. Useful for rolling
+  which is byte-for-byte what the QuietCool Smart Control app would flash. Useful
+  for rolling
   back from a buggy OEM update or starting fresh before pairing. **Only works while
   the hub is still running OEM firmware** — once ESPHome is installed, its `Upgrade`
   command refuses QuietCool's firmware domains (the hub still speaks OEM BLE, it just
@@ -197,7 +198,8 @@ are not.
    trait, not this project's. Acceptable for a one-shot bootstrap (BLE range
    ~10 m), not for repeated use.
 4. **Factory test pair ID only works on never-paired devices.** If the hub has been
-   paired (e.g. via the OEM Android app), the wizard re-pairs with a fresh random
+   paired (e.g. via the QuietCool Smart Control app on Android or iOS), the
+   wizard re-pairs with a fresh random
    UUID first, then logs in with that. A disconnect/reconnect is required between
    Pair and Login because the V2 firmware commits pair state only on disconnect.
 5. **Ordinary custom images keep ESP-IDF app rollback.** If one fails validation
@@ -236,7 +238,8 @@ mode beforehand). Two equivalent ways to get the hub into `pair_state == 2`:
 
 - **Physical button**: long-press the Pair button (KEY2 / GPIO 26) on the hub for
   ≥3 seconds. Same effect as the BLE PairMode command.
-- **OEM Android app**: tap *Pair Mode* in the app from its already-authenticated
+- **QuietCool Smart Control app (Android or iOS)**: tap *Pair Mode* in the app
+  from its already-authenticated
   session (this issues a V1 `{"Api":"PairMode"}` over BLE). Then force-close the OEM
   app to release the BLE link.
 
@@ -282,10 +285,11 @@ places to find it:
    `Phone1` (or `Phone2`, etc. up to `pair_num`). The string value is the pair-id
    (16 hex chars).
 
-2. **OEM Android app data** — `/data/data/com.quietcool.smartcontrol/...` via
+2. **Android app data** (Android-specific extraction option) —
+   `/data/data/com.quietcool.smartcontrol/...` via
    `adb backup` or root. SharedPreferences or SQLite-backed. The id is the same one
    the app sent in `{"Api":"Login","PhoneID":"<id>"}` during pairing.
 
 3. **Re-pair from scratch** — factory-reset the hub (KEY1 5-second long-hold), pair
-   once with the OEM Android app, then read the new id back via methods 1 or 2. Note:
+   once with the QuietCool Smart Control app, then read the new id back via methods 1 or 2. Note:
    factory reset also wipes Wi-Fi creds and Smart Mode thresholds.

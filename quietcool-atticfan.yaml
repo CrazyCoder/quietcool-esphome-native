@@ -787,7 +787,7 @@ switch:
     on_turn_off:
       - lambda: 'id(oem_ble).on_threshold_changed();'
 
-  # --- OEM BLE compatibility: allows the stock QuietCool Android app to
+  # --- OEM BLE compatibility: allows the stock QuietCool Smart Control app to
   # discover, pair with, and control this firmware over BLE. Ships ON by
   # default (OEM expectations out of the box). Toggle OFF from HA if you
   # don't need it — saves BLE radio time + a few KB of RAM. This switch is
@@ -1188,7 +1188,7 @@ http_flash_handler:
 # OEM BLE compatibility — reimplements the stock QuietCool V2 BLE
 # protocol (single GATT service 000000ff-..., single characteristic
 # 0000ff01-..., 22 JSON commands + pair-state machine). The stock
-# Android app discovers this as "ATTICFAN_<mac>" and works normally.
+# QuietCool Smart Control app discovers this as "ATTICFAN_<mac>" and works normally.
 # Toggleable at runtime via the "Smart Control (BLE)" switch above.
 # ====================================================================
 oem_ble_compat:

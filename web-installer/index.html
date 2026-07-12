@@ -131,7 +131,7 @@
     <div class="mode-block selected" id="target-esphome-block">
       <label class="head"><input type="radio" name="target" value="esphome" checked> <strong>Install ESPHome (custom firmware)</strong></label>
       <div class="body">
-        <p class="muted">Flashes the custom ESPHome image hosted alongside this page. Home-Assistant-native, no cloud, no OEM Android app needed afterwards. Preserves the OEM dual-OTA partition layout so you can still roll back via this same page or the OEM app.</p>
+        <p class="muted">Flashes the custom ESPHome image hosted alongside this page. Home-Assistant-native, no cloud, and no QuietCool app needed afterwards. Preserves the OEM dual-OTA partition layout so you can still roll back via this same page.</p>
       </div>
     </div>
 
@@ -140,19 +140,19 @@
       <div class="body">
         <p class="muted">Pushes the latest production OEM image (<code>IT-BLT-ATTICFAN_V4.1</code>) from QuietCool's own server. Useful if you want a fresh OEM install or if the hub picked up a buggy update.</p>
         <p class="muted"><strong>Note:</strong> this only rewrites the app partition. Wi-Fi creds, pair-ids, and Smart Mode thresholds in NVS are kept. For a real reset-to-defaults, the OEM still requires the KEY1 5-second long-hold on the hub itself.</p>
-        <p class="muted">Source: <code>http://myquietcool.com/.../IT-BLT-ATTICFAN_V4.1_*.bin</code>. Verified byte-perfect identical to what the OEM Android app would flash.</p>
+        <p class="muted">Source: <code>http://myquietcool.com/.../IT-BLT-ATTICFAN_V4.1_*.bin</code>. Verified byte-perfect identical to the image delivered by the QuietCool Smart Control app.</p>
       </div>
     </div>
   </div>
 
   <div class="card" id="card-auth">
     <h2>3. How will you authenticate?</h2>
-    <p class="muted">The hub rejects every command except <code>Login</code> until a valid pair-id authenticates the session. Pick the path that matches your hub's current state — <strong>read this before connecting</strong>, because once this page grabs the BLE link, the OEM Android app can't talk to the hub at the same time.</p>
+    <p class="muted">The hub rejects every command except <code>Login</code> until a valid pair-id authenticates the session. Pick the path that matches your hub's current state — <strong>read this before connecting</strong>, because once this page grabs the BLE link, the QuietCool Smart Control app can't talk to the hub at the same time.</p>
 
     <div class="mode-block selected" id="mode-pair-block">
       <label class="head"><input type="radio" name="auth-mode" value="pair" checked> <strong>Hub is already in use — put it into pair mode</strong></label>
       <div class="body">
-        <p>Once the OEM Android app pairs with a hub, the factory test ID stops working and the real pair-id isn't user-visible. This path side-steps that by putting the hub into pair mode so we can register a fresh ID.</p>
+        <p>Once the QuietCool Smart Control app on Android or iOS pairs with a hub, the factory test ID stops working and the real pair-id isn't user-visible. This path side-steps that by putting the hub into pair mode so we can register a fresh ID.</p>
         <p><strong>Pick whichever is easier for you</strong> — both end with the hub advertising as pairable for ~tens of seconds:</p>
 
         <div class="callout"><strong>Method A — physical button</strong>
@@ -163,9 +163,9 @@
           </ol>
         </div>
 
-        <div class="callout" style="border-left-color: var(--accent); background: rgba(78,192,255,.08)"><strong style="color: var(--accent)">Method B — OEM Android app</strong>
+        <div class="callout" style="border-left-color: var(--accent); background: rgba(78,192,255,.08)"><strong style="color: var(--accent)">Method B — Smart Control app</strong>
           <ol class="step-list" style="margin: 6px 0 0 0">
-            <li>On a phone with the <strong>QuietCool Smart Control</strong> app (Android/iOS only — it needn't be the device running this installer), tap your hub, then tap <strong>Pair Mode</strong>.</li>
+            <li>On a phone with the <strong>QuietCool Smart Control</strong> app (available on Android and iOS — it needn't be the device running this installer), tap your hub, then tap <strong>Pair Mode</strong>.</li>
             <li>Wait until the app confirms pair mode is active.</li>
             <li><strong>Force-close the OEM app</strong> (swipe it away in the recents view). The hub only allows one BLE central at a time — leaving the app open will block this page from connecting.</li>
             <li>Come back here and press the <strong>Connect &amp; flash</strong> button in step 6 below.</li>
@@ -182,7 +182,7 @@
         <p class="muted">A factory-fresh hub accepts the OEM's built-in test pair-id with no button press — just keep the default below. This also works if you saved a pair-id from a previous run of this wizard in this browser.</p>
         <label for="pairid">Pair ID (max 100 chars)</label>
         <input id="pairid" type="text" autocomplete="off" autocapitalize="off" spellcheck="false">
-        <p class="muted">Default <code>1234567dsad8wqw9asasd</code> is the OEM's factory test ID — stops working the first time the OEM Android app pairs with the hub.</p>
+        <p class="muted">Default <code>1234567dsad8wqw9asasd</code> is the OEM's factory test ID — it stops working the first time the QuietCool Smart Control app on Android or iOS pairs with the hub.</p>
       </div>
     </div>
   </div>
@@ -275,7 +275,7 @@
     <h2>Caveats</h2>
     <ul class="step-list muted">
       <li>The OEM firmware does <strong>not</strong> verify signatures on OTA images — anything reachable at the firmware URL gets flashed. Only point this at images you trust.</li>
-      <li>If the hub has been paired with the OEM Android app, the factory test pair ID stops working — use the <em>put it into pair mode</em> option instead.</li>
+      <li>If the hub has been paired with the QuietCool Smart Control app on Android or iOS, the factory test pair ID stops working — use the <em>put it into pair mode</em> option instead.</li>
       <li>Wi-Fi password is transmitted in cleartext over BLE (an OEM trait, not ours). Acceptable for a one-shot bootstrap; BLE range is ~10 m.</li>
       <li>If the host serving the firmware uses HTTPS, the hub trusts standard public CAs. If your cert isn't trusted, fall back to plain <code>http://</code>.</li>
     </ul>

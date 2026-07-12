@@ -12,7 +12,8 @@
 //   Upgrade  (A=10)  {"A":10,"U":"<url>"}
 //   SetRouter(A=11)  {"A":11,"S":"<ssid>","P":"<password>"}
 //
-// V1 (which the OEM Android app uses) is verbose: {"Api":"Login","PhoneID":"..."}
+// V1 (used by the analyzed Android build of the OEM app) is verbose:
+// {"Api":"Login","PhoneID":"..."}
 // V2 (the new dialect) abbreviates every key. The wizard targets V2 because that
 // gets us numeric dispatch and tighter response framing.
 //
@@ -24,11 +25,11 @@
 //
 // The wizard exposes two auth modes (visible on page load — the user picks
 // one BEFORE clicking Connect, because once Web BLE grabs the link the OEM
-// Android app can't talk to the hub):
+// QuietCool Smart Control app can't talk to the hub):
 //   - "login":  user supplies an existing valid pair-id (factory test for
 //               never-paired hubs, or a saved one from a previous run of
 //               this wizard). One write: Login → Upgrade → SetRouter.
-//   - "pair":   user has just hit "Pair Mode" in the OEM Android app
+//   - "pair":   user has just hit "Pair Mode" in the QuietCool app
 //               (which sets pair_state == 2 from an already-authenticated
 //               session) and force-closed the app so we can grab BLE.
 //               The wizard adds a fresh random pair-id, reconnects,
@@ -195,7 +196,7 @@ async function disconnectFromHub() {
   pendingResolve = null;
   if (pendingTimeout) { clearTimeout(pendingTimeout); pendingTimeout = null; }
   onDisconnectUiUpdate();
-  log.ok("Disconnected. You can now use the OEM Android app again if needed.");
+  log.ok("Disconnected. You can now use the QuietCool Smart Control app again if needed.");
 }
 
 function onDisconnectUiUpdate() {
@@ -236,8 +237,9 @@ function resultErrorReason(resp, command) {
 }
 
 function randomPairId() {
-  // 16 hex chars = 8 random bytes, matching the OEM Android app's pair-id
-  // convention. The OEM Pair handler's length check allows up to 100 chars, but
+  // 16 hex chars = 8 random bytes, matching the analyzed Android build's
+  // pair-id convention and accepted by the same hub protocol used from iOS.
+  // The OEM Pair handler's length check allows up to 100 chars, but
   // sticking to the OEM's 16-char convention is the safe default. 2^64 entropy
   // is plenty for collision-free assignment within the 50-slot pair list.
   const b = new Uint8Array(8);
@@ -663,7 +665,7 @@ function updateTargetUi() {
   const doneNote = document.getElementById("done-target-note");
   if (doneNote) {
     doneNote.textContent = target === "oem"
-      ? "After ~3-5 min the hub reboots into the OEM firmware. The OEM Android app should see it normally."
+      ? "After ~3-5 min the hub reboots into the OEM firmware. The QuietCool Smart Control app on Android or iOS should see it normally."
       : "After ~3-5 min look for an mDNS device named quietcool-atticfan-XXXXXX.local on your network, or wait for Home Assistant to discover a new ESPHome device.";
   }
 }

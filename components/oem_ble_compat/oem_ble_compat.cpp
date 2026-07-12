@@ -52,7 +52,7 @@ esp32_ble::BLEAdvertising *oem_ble_advertising() {
 }
 }  // namespace
 
-// OEM GATT UUIDs — must match stock firmware for the Android app to find us.
+// OEM GATT UUIDs — must match stock firmware for the Smart Control app to find us.
 static const uint8_t SERVICE_UUID_RAW[] = {
     0xfb, 0x34, 0x9b, 0x5f, 0x80, 0x00, 0x00, 0x80,
     0x00, 0x10, 0x00, 0x00, 0xff, 0x00, 0x00, 0x00};
@@ -973,7 +973,7 @@ std::string OemBleCompat::handle_set_mode_(cJSON *root) {
 // A=10 Upgrade — real OTA flash from a client-supplied URL.
 //
 // Auth-gated (check_gate requires PairState::Auth; first pairing is physical
-// KEY2). OEM-domain URLs are a deliberate no-op (ack TRUE) so the OEM Android
+// KEY2). OEM-domain URLs are a deliberate no-op (ack TRUE) so the OEM Smart Control
 // app can't flash stock firmware over this build. Any other valid http(s) URL
 // triggers a real OTA via the shared ota.http_request engine, then reboots.
 // NB: this does NOT wipe NVS (a custom-firmware update preserves config — the
