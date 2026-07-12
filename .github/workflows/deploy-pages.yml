@@ -27,7 +27,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Reuse the previously-built firmware when nothing that feeds the dist
+      # build has changed — site-only pushes then skip the whole ESP-IDF
+      # toolchain (~4-5 min) and deploy in well under a minute. The key hashes
+      # every input of the dist build (dev-only files like wifi-dev.yaml and
+      # host-side component tests are deliberately excluded) plus this workflow
+      # file, so an ESPHome version bump below forces a rebuild. If GitHub
+      # evicts the cache (~7 days unused), the next push just rebuilds once.
+      - name: Restore built firmware
+        id: fw-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            web-installer/firmware.ota.bin
+            web-installer/firmware.ota.bin.md5
+          key: fw-${{ hashFiles('quietcool-atticfan.yaml', 'wifi-dist.yaml', 'creds-dist.yaml', 'partitions.csv', 'components/**', '!components/**/test/**', '.github/workflows/deploy-pages.yml') }}
+
       - uses: actions/setup-python@v5
+        if: steps.fw-cache.outputs.cache-hit != 'true'
         with:
           python-version: "3.12"
 
@@ -36,6 +53,7 @@ jobs:
       # C++ can go stale across config changes, and `esphome clean` does not clear
       # it — a from-scratch build guarantees the artifact matches the source.
       - name: Cache PlatformIO toolchain
+        if: steps.fw-cache.outputs.cache-hit != 'true'
         uses: actions/cache@v4
         with:
           path: |
@@ -47,14 +65,17 @@ jobs:
       # Pinned for reproducible firmware artifacts. Bump this (and the cache key
       # above) in lockstep with the version you build/test with locally.
       - name: Install ESPHome
+        if: steps.fw-cache.outputs.cache-hit != 'true'
         run: pip install esphome==2026.6.5
 
       # `dist` swaps the dev credential packages for the secret-free ones, so this
       # build needs no secrets.yaml and bakes in no Wi-Fi creds / API key.
       - name: Build dist firmware
+        if: steps.fw-cache.outputs.cache-hit != 'true'
         run: esphome -s build_mode dist compile quietcool-atticfan.yaml
 
       - name: Stage firmware + checksum next to the installer
+        if: steps.fw-cache.outputs.cache-hit != 'true'
         run: |
           BIN=.esphome/build/quietcool-atticfan/.pioenvs/quietcool-atticfan/firmware.ota.bin
           test -f "$BIN" || { echo "::error::firmware.ota.bin not found at $BIN"; exit 1; }
