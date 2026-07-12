@@ -97,7 +97,7 @@ When in doubt, build your custom firmware from this project (which already wires
 
 The page POSTs `http://<host>/api/flash_url?url=…&md5=…` (no body, no custom
 headers — so no CORS preflight is required for the simple case). The device's
-`http_flash_handler` responds `202 Accepted` immediately, then ~500 ms later starts
+`http_flash_handler` responds `200 OK` ("Accepted") immediately, then ~500 ms later starts
 the OTA — pulls the bin, writes to the inactive OTA slot, reboots into it. The
 running slot can never be overwritten (ESP-IDF guarantees this) so the previous
 firmware survives in the other slot for one-OTA rollback.

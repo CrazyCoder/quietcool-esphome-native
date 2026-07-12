@@ -4,7 +4,7 @@ Open-source ESPHome firmware for the **QuietCool IT-AF-SMT Smart Attic Fan Contr
 
 **Status:** fan control, Smart Mode (autonomous temp/humidity auto-switch), countdown timer, reboot-resume, LED indicators, button gestures, and full OEM BLE compatibility (stock QuietCool Smart Control app works with this firmware) are all live and tested end-to-end.
 
-> **Almost a distribute-anywhere firmware bundle.** The credential-free `dist` build (`esphome -s build_mode dist compile quietcool-atticfan.yaml`) ships with no Wi-Fi creds, no API encryption key, and no OTA password baked in: at boot, `oem_nvs_reader` imports Wi-Fi creds from the OEM-stored NVS partition (so anyone whose hub was previously connected via the QuietCool app joins their network within ~5 s), then the ESPHome dashboard's **Adopt** flow generates per-device api/ota secrets and OTA-pushes them. Two things still pending before this is truly shareable to strangers: a live on-device test of the dist build (it's compile-clean but only the author has run it), and publishing the `dashboard_import:` target repo at `github.com/CrazyCoder/quietcool-esphome-native` so the adopt URL resolves.
+> **A distribute-anywhere firmware bundle.** The credential-free `dist` build (`esphome -s build_mode dist compile quietcool-atticfan.yaml`) ships with no Wi-Fi creds, no API encryption key, and no OTA password baked in: at boot, `oem_nvs_reader` imports Wi-Fi creds from the OEM-stored NVS partition (so anyone whose hub was previously connected via the QuietCool app joins their network within ~5 s), then the ESPHome dashboard's **Adopt** flow generates per-device api/ota secrets and OTA-pushes them.
 
 ---
 
@@ -17,6 +17,7 @@ After flashing and pairing, the device exposes the entities below. The fan, sens
 | Entity | Purpose |
 |---|---|
 | `fan.<device>_attic_fan` | The fan. Preset modes are the available speed names per DIP wiring (Low, Med, High). Operating mode (Timer/Run/Smart) is controlled by the separate Fan Mode select — see below. |
+| `select.<device>_fan_mode` | Operating mode: **Timer** / **Run** / **Smart** (default Timer). Run drops the countdown timer; Smart hands control to the autonomous temp/humidity logic. Lives in the device Configuration panel. See [Modes & timers](#modes--timers). |
 | `sensor.<device>_runtime_remaining` | Live countdown of any active timer, in minutes. 0 when idle. |
 | `sensor.<device>_temperature` | Attic temperature in °F (SHT30 sensor on the hub). |
 | `sensor.<device>_humidity` | Attic humidity (%). |
@@ -73,7 +74,7 @@ On first boot after flashing over OEM firmware, existing presets are imported fr
 
 | Entity | Default | What it does |
 |---|---|---|
-| `number.<device>_default_run_time` | **180 min (3h)** | Auto-armed countdown when you turn the fan on from HA (Timer mode). Set to **0** to make default turn-on behave like Run mode (no auto-timer). Or select the **Run** preset to run indefinitely regardless of this setting. Persists across reboots. |
+| `number.<device>_default_run_time` | **180 min (3h)** | Auto-armed countdown when you turn the fan on from HA (Timer mode). Set to **0** to make default turn-on behave like Run mode (no auto-timer). Or set **Fan Mode** to **Run** to run indefinitely regardless of this setting. Persists across reboots. |
 | `number.<device>_smart_t_high` | **37.8 °C (100 °F)** | Smart Mode: above this temperature → HIGH speed. |
 | `number.<device>_smart_t_med` | **32.2 °C (90 °F)** | Smart Mode: above this → MED speed (3-speed wiring only). |
 | `number.<device>_smart_t_low` | **26.7 °C (80 °F)** | Smart Mode: above this → LOW speed. |
@@ -86,8 +87,11 @@ On first boot after flashing over OEM firmware, existing presets are imported fr
 | `select.<device>_fan_model` | **Generic** | Fan model from the OEM app's model list (Generic, AFG SMT PRO-2.0, etc.). |
 | `text.<device>_fan_serial_number` | *(empty)* | Fan serial number (max 25 chars). |
 | `switch.<device>_louver_pop_open` | OFF | When ON, prepends a brief HIGH pulse on Off→Low/Med transitions to assist mechanical louvers opening via airflow. OEM stock controller doesn't have this; opt-in for fans with sluggish shutters. |
-| `switch.<device>_dry_run_mode` | OFF | When ON, suppresses relay GPIO writes while everything else (logic, timer, HA state) runs normally. **Use this during install / debugging** so you can iterate firmware without actually cycling the fan. |
-| `switch.<device>_restore_last_state_on_boot` | OFF | When ON, the firmware persists last speed + Smart Mode state and resumes after a controller reboot. Useful so a brief power blip doesn't kill night-cooling. OFF matches OEM cold-boot (safer). |
+| `switch.<device>_dry_run_mode` | OFF | When ON, suppresses relay GPIO writes while everything else (logic, timer, HA state) runs normally. **Use this during install / debugging** so you can iterate firmware without actually cycling the fan. A deliberate ON persists across reboots, so OTA-flash iteration doesn't re-enable the relays behind your back. |
+| `switch.<device>_resume_on_boot` | OFF | When ON, the firmware persists last speed + Smart Mode state and resumes after a controller reboot. Useful so a brief power blip doesn't kill night-cooling. OFF matches OEM cold-boot (safer). |
+| `switch.<device>_smart_t_high_enabled` (×5) | **ON** | Per-rule enable switches for the five Smart Mode thresholds (T High / T Med / T Low / H High / H Low). Turning one OFF removes that rule from the decision tree. Stored per preset, like the threshold values. |
+| `number.<device>_cal_t` | **0.0 °C** | Calibration offset added to the SHT30 temperature reading (applied before the °C→°F conversion). |
+| `number.<device>_cal_h` | **0.0 %** | Calibration offset added to the SHT30 humidity reading. |
 
 ### Diagnostic
 
@@ -95,6 +99,7 @@ On first boot after flashing over OEM firmware, existing presets are imported fr
 |---|---|
 | `button.<device>_restart` | Reboot the controller (everyday "I changed the DIP, refresh HA's view" button). |
 | `button.<device>_safe_mode` | Reboot into ESPHome safe mode (Wi-Fi + OTA only, no custom components). Recovery path if a firmware push starts crashing. |
+| `button.<device>_factory_reset` | **Factory reset from HA** — wipes the entire NVS (Wi-Fi creds, all settings) and reboots into Improv-BLE for re-onboarding. Same effect as the KEY1 ≥ 5 s hold. |
 | `button.<device>_reset_watchdog` | Clears the 24h runtime watchdog or over-temp trip. Required to re-enable Smart Mode after a safety event. |
 | `binary_sensor.<device>_watchdog_tripped` | True when the 24h continuous runtime watchdog or over-temp safety has tripped. Clears via the Reset Watchdog button. |
 | `binary_sensor.<device>_improv_ble_advertising` | True while the device is advertising Improv-BLE for Wi-Fi re-onboarding. |
@@ -103,18 +108,20 @@ On first boot after flashing over OEM firmware, existing presets are imported fr
 | `button.<device>_clear_ble_pairings` | Wipe all stored BLE pair-ids from NVS. Existing Smart Control app clients must re-pair afterward. |
 | `text_sensor.<device>_mac_wi_fi` | Wi-Fi MAC address. |
 | `text_sensor.<device>_mac_ble` | BLE MAC address (differs from Wi-Fi MAC by +2 on ESP32). |
+| `text_sensor.<device>_ota_active_partition` | OTA slot the running firmware booted from (label + flash offset). |
+| `text_sensor.<device>_ota_target_partition` | OTA slot the next firmware push will be written to. |
 
 ---
 
 ## Modes & timers
 
-The fan has three operating modes, selectable from the HA fan card's preset dropdown or via the stock QuietCool Smart Control app. Additionally, HA services provide fine-grained timer control.
+The fan has three operating modes, selectable from the **Fan Mode** select (in HA's device Configuration panel) or via the stock QuietCool Smart Control app. The fan card's preset dropdown holds the *speeds* (Low/Med/High per DIP wiring), not the modes. Additionally, HA services provide fine-grained timer control.
 
 ### Mode comparison: ESPHome ↔ stock app ↔ OEM firmware
 
-| ESPHome preset | Smart Control app | OEM firmware internal | Behavior |
+| ESPHome Fan Mode | Smart Control app | OEM firmware internal | Behavior |
 |---|---|---|---|
-| *(default turn-on)* | Timer | mode 1 ("Run") | Countdown timer — fan runs at chosen speed for a set duration, auto-stops when timer expires |
+| **Timer** *(default)* | Timer | mode 1 ("Run") | Countdown timer — fan runs at chosen speed for a set duration, auto-stops when timer expires |
 | **Run** | Run | mode 4 ("Timer") | Indefinite — fan runs until manually stopped. 24h safety watchdog still applies |
 | **Smart** | Smart (TH) | mode 2 ("Smart") | Autonomous — firmware reads SHT30 and drives speed per temp/humidity thresholds |
 | *(fan off)* | Idle | mode 0 ("Off") | All relays off |
@@ -126,7 +133,7 @@ The fan has three operating modes, selectable from the HA fan card's preset drop
 - Drives the relays at the requested speed.
 - **Auto-arms a countdown** of `default_run_time` minutes (initial 180 = 3h). Fan auto-stops when timer expires.
 - Matches the stock app's "Timer" mode.
-- Set `default_run_time` to **0** in HA to disable the auto-arm (fan then runs indefinitely on turn-on, same as selecting the Run preset).
+- Set `default_run_time` to **0** in HA to disable the auto-arm (fan then runs indefinitely on turn-on, same as selecting Run in Fan Mode).
 
 ### 2. Run mode (select: `Fan Mode → Run`)
 
@@ -141,7 +148,7 @@ The fan has three operating modes, selectable from the HA fan card's preset drop
 - Positive `delta_minutes`: extend an existing timer OR start fresh from off (resumes last speed).
 - Negative: reduce; saturates at 0 (turns the fan off).
 - 0: defensive no-op.
-- Capped at `max_run_minutes` (1440 = 24h) per call.
+- The resulting total remaining time (existing timer + delta) is capped at `max_run_minutes` (1440 = 24h).
 
 Example HA buttons:
 
@@ -175,7 +182,7 @@ Example HA buttons:
 service: esphome.<device>_set_runtime
 data: {speed: high, minutes: 30}
 
-# Pin to Low indefinitely (no auto-off — same as Run preset)
+# Pin to Low indefinitely (no auto-off — same as Run mode)
 service: esphome.<device>_set_runtime
 data: {speed: low, minutes: 0}
 
@@ -224,8 +231,8 @@ On **1-speed wiring**, only rules 1, 2, and 5 apply (with H Response limited to 
 |---|---|---|
 | HA Core / OS restart | unchanged | keeps ticking |
 | Wi-Fi outage | unchanged | keeps ticking |
-| Controller reboot, **Restore = OFF** (default) | OFF (OEM cold-boot parity) | cleared |
-| Controller reboot, **Restore = ON** | resumed at last speed | resumed with computed remaining time (wall-clock based) |
+| Controller reboot, **Resume on Boot = OFF** (default) | OFF (OEM cold-boot parity) | cleared |
+| Controller reboot, **Resume on Boot = ON** | resumed at last speed | resumed with computed remaining time (wall-clock based) |
 | Controller reboot during a timer that would have expired | OFF | stays off (didn't try to "catch up") |
 
 ---
@@ -327,9 +334,9 @@ The firmware layers multiple independent recovery paths so a single failure mode
 
 | What's broken | Recovery |
 |---|---|
-| **Wi-Fi unreachable** (moved house, AP password changed, wrong SSID) | KEY2 hold **3 – 5 s** → starts Improv-BLE for 5 min (LED4 VeryFast). Re-onboard via the Web Installer or any Improv-compatible phone app. **No gesture needed, though:** the WiFi component auto-starts *both* `esp32_improv` and the captive portal **~90 s after the last good connection drops** (`wifi_timeout`/`ap_timeout` = 90 s; this fires on a runtime loss, not just at boot). Alternatives: the fallback Wi-Fi AP **`QuietCool Setup`** (captive portal) comes up at that same 90 s mark — connect a phone to it and open the captive page; or the companion `qc-ble` CLI (published separately) — `qc-ble provision-wifi` over BLE from a laptop/desktop with a USB HCI dongle (live-switches Wi-Fi at runtime — no reboot — and keeps BLE up so you can retry creds immediately). If Wi-Fi stays down 15 min the device reboots and the 90 s recovery timers simply re-arm. |
+| **Wi-Fi unreachable** (moved house, AP password changed, wrong SSID) | KEY2 hold **3 – 5 s** → starts Improv-BLE for 5 min (LED4 VeryFast). Re-onboard via the Web Installer or any Improv-compatible phone app. **No gesture needed, though:** the WiFi component auto-starts *both* `esp32_improv` and the captive portal **~90 s after the last good connection drops** (`ap_timeout: 90s`; this fires on a runtime loss, not just at boot). Alternatives: the fallback Wi-Fi AP **`QuietCool Setup`** (captive portal) comes up at that same 90 s mark — connect a phone to it and open the captive page; or the companion `qc-ble` CLI (published separately) — `qc-ble provision-wifi` over BLE from a laptop/desktop with a USB HCI dongle (live-switches Wi-Fi at runtime — no reboot — and keeps BLE up so you can retry creds immediately). If Wi-Fi stays down 15 min the device reboots and the 90 s recovery timers simply re-arm. |
 | **`Smart Control (BLE)` got turned OFF** and HA is unreachable, so you can't turn it back on | KEY2 **short press** (< 3 s) → re-enables `Smart Control (BLE)` and enters pair mode. **LED4 SlowBlink confirms it blind.** This press is inert when BLE is already on (it falls through to its normal pair-mode toggle). |
-| **`Smart Control (BLE)` got turned OFF *and* Wi-Fi is broken** (the worst case — no HA, no physical access) | Automatic — ESPHome itself brings up two recovery paths ~90 s after STA fails, on different radios: the **`QuietCool Setup` captive portal AP** (join from a phone, the captive page re-enters Wi-Fi creds; iOS needs Settings → Wi-Fi) and **Improv-BLE** (the WiFi component auto-starts `esp32_improv` at the 90 s `wifi_timeout` — re-onboard via the Web Installer or any Improv-compatible phone app). Either is sufficient. The OEM BLE protocol surface stays off in this case (Improv and OEM BLE can't coexist on one advert), but it's not needed for recovery — once Wi-Fi is restored, HA can flip `Smart Control (BLE)` back on. |
+| **`Smart Control (BLE)` got turned OFF *and* Wi-Fi is broken** (the worst case — no HA, no physical access) | Automatic — ESPHome itself brings up two recovery paths ~90 s after STA fails, on different radios: the **`QuietCool Setup` captive portal AP** (join from a phone, the captive page re-enters Wi-Fi creds; iOS needs Settings → Wi-Fi) and **Improv-BLE** (the WiFi component auto-starts `esp32_improv` at the 90 s `ap_timeout` — re-onboard via the Web Installer or any Improv-compatible phone app). Either is sufficient. The OEM BLE protocol surface stays off in this case (Improv and OEM BLE can't coexist on one advert), but it's not needed for recovery — once Wi-Fi is restored, HA can flip `Smart Control (BLE)` back on. |
 | **Firmware crash-loops on boot** | Automatic — after 10 consecutive failed boots, ESPHome enters safe mode (Wi-Fi + OTA only) on its own. No gesture needed. From there, push a fixed firmware image over OTA. |
 | **Firmware boots but is otherwise misbehaving** (runaway control logic, HA unreachable, etc.) | KEY2 hold **≥ 5 s** → reboot into safe mode manually. Or press the **Safe Mode** button in HA. Same effect: Wi-Fi + OTA only, no custom components — flash a corrected build over OTA. |
 | **Lost BLE pairing**, or stock app says *"device memory full"* | `button.<device>_clear_ble_pairings` in HA wipes just the pair-id list. Or, more thorough: KEY1 hold **≥ 5 s** → factory reset (wipes the entire NVS, reboots into Improv). The factory reset also wipes Wi-Fi creds, so have Improv ready. |
@@ -379,7 +386,7 @@ All GPIO assignments were verified against the OEM firmware (which uses the exac
 
 ### Path A: existing hub running OEM firmware (Web BLE)
 
-Use the Web Installer (hosted separately). Open in Chrome on Android or Bluefy on iOS, follow the prompts — flashes via the OEM's own unauthenticated BLE OTA mechanism in under 2 minutes. No UART, no enclosure cracking.
+Use the Web Installer (source and hosting instructions in [`web-installer/`](web-installer/README.md)). Open in Chrome on Android or Bluefy on iOS, follow the prompts — flashes via the OEM's own unauthenticated BLE OTA mechanism in under 2 minutes. No UART, no enclosure cracking.
 
 The web installer hosts a **credential-free distribution build** — no Wi-Fi passwords, no API encryption key, no OTA password baked in. Onboarding happens in two automatic steps:
 
@@ -415,7 +422,7 @@ esphome upload quietcool-atticfan.yaml --device COM<N>
 ./flash.bat                                  # wraps `esphome upload --device <mdns>.local`
 ```
 
-ESPHome 2026.5+ required (`uv tool install esphome`).
+ESPHome 2026.5+ required — enforced by `min_version` in the YAML (`uv tool install esphome`).
 
 ### Path C: re-flash custom firmware over BLE
 
@@ -442,6 +449,8 @@ This complements the HTTP endpoint (`POST /api/flash_url`) and ESPHome OTA: it's
   partitions.csv                # OEM-compatible: nvs@0x9000, ota_0@0x20000, ota_1@0x200000
   secrets.yaml.example          # template (real secrets.yaml is gitignored)
   flash.bat                     # compile + OTA upload, one shot
+  LICENSE                       # GPL-3.0
+  web-installer/                # Web BLE + HTTP-flash installer page (see its README)
   components/
     fan_controller/             # speed control + DIP guards + countdown timer + reboot-resume
     led_state_machine/          # 10 Hz LED driver from world state
@@ -450,7 +459,7 @@ This complements the HTTP endpoint (`POST /api/flash_url`) and ESPHome OTA: it's
     http_flash_handler/         # HTTP endpoint for remote firmware flash
 ```
 
-Each custom component has a `test/` subdirectory with host-side unit tests (run via `run_tests.bat` on Windows or `g++ -std=c++17 -I..` directly elsewhere). Tests cover the fan/timer/restore/Smart Mode decision tree, dual-button gesture tracker, LED state machine, HTTP flash handler input validation, OEM-NVS import decision tree, and OEM BLE compatibility protocol (gate checks, field mapping, frame assembly, fan model catalogue, input validation).
+Each custom component has a `test/` subdirectory with host-side unit tests (run via `run_tests.bat` on Windows or `g++ -std=c++17 -I..` directly elsewhere; the batch runner auto-detects MSYS2 mingw64 in `C:\msys64` or `C:\tools\msys64`, honors a pre-set `MINGW` env var, and otherwise falls back to `g++` on `PATH`). Tests cover the fan/timer/restore/Smart Mode decision tree, dual-button gesture tracker, LED state machine, HTTP flash handler input validation, OEM-NVS import decision tree, and OEM BLE compatibility protocol (gate checks, field mapping, frame assembly, fan model catalogue, input validation).
 
 ---
 
@@ -460,7 +469,7 @@ Each custom component has a `test/` subdirectory with host-side unit tests (run 
 
 You have four paths, in increasing order of how badly things have to be broken before you need each one:
 
-1. **HA button: `Restore Stock Firmware (V4.1)`.** In `Settings → Devices → QuietCool Attic Fan → Configuration`, press the button. The firmware pulls the byte-perfect OEM `IT-BLT-ATTICFAN_V4.1` bin from `http://myquietcool.com/profile/upload/2025/11/18/IT-BLT-ATTICFAN_V4.1_20251118010357A008.bin`, verifies its MD5, writes it to the inactive OTA slot via the ESP-IDF canonical OTA APIs, and reboots into it. The active OTA slot can never be overwritten (ESP-IDF guarantees this), so the previous ESPHome firmware stays in the other slot for one-OTA rollback if needed.
+1. **HA button: `Restore Stock Firmware`.** In `Settings → Devices → QuietCool Attic Fan → Configuration`, press the button. The firmware pulls the byte-perfect OEM `IT-BLT-ATTICFAN_V4.1` bin from `http://myquietcool.com/profile/upload/2025/11/18/IT-BLT-ATTICFAN_V4.1_20251118010357A008.bin`, verifies its MD5, writes it to the inactive OTA slot via the ESP-IDF canonical OTA APIs, and reboots into it. The active OTA slot can never be overwritten (ESP-IDF guarantees this), so the previous ESPHome firmware stays in the other slot for one-OTA rollback if needed.
 2. **Physical: hold BOTH KEY1 + KEY2 for 10 seconds.** Same flow as #1, fired from a button-gesture lambda. Works when HA is unreachable, the network is up, and the firmware boots far enough to read button GPIOs. LED feedback: all 3 LEDs SlowBlink from 5–10 s ("keep holding"), then all 3 LEDs VeryFast at 10 s ("commit imminent — release to fire").
 3. **Web Installer (HTTP-flash card).** The Web Installer's "Already running our ESPHome firmware?" card POSTs the stock bin URL + MD5 to the device's `/api/flash_url` endpoint (the `http_flash_handler` component), which runs the same HTTP OTA as path 1. Use **this**, not the page's Web-BLE flow — this firmware's OEM BLE `Upgrade` command (A=10) **blocks OEM firmware domains**, so pointing it at the stock `myquietcool.com` bin silently no-ops against a hub already running this firmware. (A=10 *does* flash non-OEM URLs — see [Path C](#path-c-re-flash-custom-firmware-over-ble) — but stock lives on an OEM domain, so for going back to stock use this card or the button, which call `http_request` directly.)
 4. **UART reflash.** Always works, fully offline. Download the stock bin from the URL in path 1 (verify its MD5 — see below), open the enclosure, jumper GPIO0 to GND on power-up, then `esptool write-flash` it to the **active** OTA slot — `0x20000` (ota_0) or `0x200000` (ota_1); the boot log line `Loaded app from partition at offset 0x...` tells you which. Worst-case escape hatch.
@@ -473,7 +482,7 @@ You have four paths, in increasing order of how badly things have to be broken b
 
 ## NVS partition constraints
 
-The IT-AF-SMT ships with a **16 KB NVS partition** (4 pages of 4 KB each). The OEM firmware pre-populates it with Wi-Fi credentials, BLE pair-ids, Smart Mode thresholds, presets, and — critically — five `Group_*` blobs that log hourly temperature, humidity, and relay state for 31 rolling days (~2.7 KB total). On a device that has been running OEM firmware, three of four NVS pages are typically FULL with this static data before this firmware even boots.
+The IT-AF-SMT ships with a **16 KB NVS partition** (4 pages of 4 KB each). The OEM firmware pre-populates it with Wi-Fi credentials, BLE pair-ids, Smart Mode thresholds, presets, and — critically — five `Group_*` blobs that log hourly temperature, humidity, and relay state for 31 rolling days (~2.5 KB total). On a device that has been running OEM firmware, three of four NVS pages are typically FULL with this static data before this firmware even boots.
 
 **Why this matters.** ESP-IDF's NVS is append-only within each page. When a key is updated, the old entry is marked erased and a new entry is appended. Page-level garbage collection ("compaction") reclaims erased entries, but it requires at least one completely free (UNINIT) page to use as scratch. If all pages contain live entries and no page is free, NVS writes fail with `ESP_ERR_NVS_NOT_ENOUGH_SPACE` — even if the partition has plenty of logically-erased space that could be reclaimed.
 
@@ -483,9 +492,10 @@ ESPHome's `preferences` system stores fan state, calibration offsets, and config
 
 The `oem_nvs_reader` component performs a one-shot cleanup on first boot:
 
-1. **Erases the 5 `Group_*` blobs** from the OEM's `hx_list` NVS namespace (`Group_Tem`, `Group_Hem`, `Group_Time`, `Group_Year`, `Group_month`). These are rolling sensor logs with no value to this firmware — reclaiming them frees ~2.7 KB across ~2 NVS pages.
-2. **Sets a marker preference** so the cleanup never re-runs on subsequent boots.
-3. **Preserves everything else** in `hx_list` — BLE pair-ids, Smart Mode config, presets, and fan name all survive intact.
+1. **Erases the 5 `Group_*` blobs** from the OEM's `hx_list` NVS namespace (`Group_Tem`, `Group_Hem`, `Group_Time`, `Group_Year`, `Group_month`). These are rolling sensor logs with no value to this firmware — reclaiming them frees ~2.5 KB across ~2 NVS pages.
+2. **Erases up to 24 duplicated preset-name keys.** The OEM firmware writes each preset name three times (e.g. `testnamem1` / `testnamem11` / `testnamem111`) but only ever reads the primary copy — the duplicates waste ~16 NVS entry slots. The primary copies (and therefore the presets themselves) are untouched.
+3. **Sets a marker preference** so the cleanup never re-runs on subsequent boots.
+4. **Preserves everything else** in `hx_list` — BLE pair-ids, Smart Mode config, presets, and fan name all survive intact.
 
 The cleanup is idempotent: `nvs_erase_key` on an already-missing key returns `ESP_ERR_NVS_NOT_FOUND` (treated as success). If the marker write itself fails (because NVS is critically full), the cleanup still executes — next boot retries both the erase and the marker.
 
@@ -494,13 +504,19 @@ The cleanup is idempotent: `nvs_erase_key` on an already-missing key returns `ES
 | Measure | Effect |
 |---|---|
 | `preferences.flash_write_interval: 600s` | Dirty preferences flush every 10 min instead of ESPHome's default 60 s — 10× fewer NVS append cycles |
-| Dry Run Mode uses `ALWAYS_OFF` restore mode | No NVS write at all for this switch (it's a debug tool, not user state) |
+| BLE Pair Mode switch uses `ALWAYS_OFF` restore mode | No NVS write at all for this switch (pair mode is momentary, not user state) |
 
 ### Stock reversion safety
 
 The erased `Group_*` blobs are **not required** by the OEM firmware for normal operation. When the stock firmware boots and finds a missing `Group_*` key, `nvs_get_blob` returns `ESP_ERR_NVS_NOT_FOUND` and the hourly logger simply starts fresh — creating the blob on its next periodic write. No crash, no data loss, no reconfiguration needed.
 
 BLE pair-ids, Smart Mode thresholds, presets, Wi-Fi credentials, and all other OEM settings are untouched by the cleanup. A user who reverts to stock keeps their paired phones and configuration.
+
+---
+
+## License
+
+[GPL-3.0](LICENSE) — matching the license of the ESPHome C++ core these components build against.
 
 ---
 
