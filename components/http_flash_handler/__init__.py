@@ -1,7 +1,7 @@
-# HttpFlashHandler external component — registers POST /api/flash_url on
-# the device's web_server, calls the ota.http_request component to flash
-# arbitrary URLs. Used by the Web Installer to push stock-firmware or
-# custom builds onto a device already running our ESPHome firmware.
+# HttpFlashHandler external component — registers URL-download and local-file
+# firmware endpoints on the device web server. The latter is a version-neutral
+# OEM restore path that validates a streamed OTA application before deliberately
+# confirming the foreign slot and preserving OEM NVS state.
 
 import esphome.codegen as cg
 import esphome.config_validation as cv

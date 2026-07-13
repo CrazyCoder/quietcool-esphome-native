@@ -69,12 +69,14 @@
     font-weight: 600; opacity: .8; }
   button.danger { background: var(--err); color: #2c0000; }
   button.danger:active:not(:disabled) { background: #e05252; }
-  input[type="text"], input[type="password"], input[type="url"], input[type="number"], textarea {
+  input[type="text"], input[type="password"], input[type="url"], input[type="number"],
+  input[type="file"], textarea {
     width: 100%; padding: 12px; font-size: 16px; background: #0c1418;
     color: var(--fg); border: 1px solid var(--border); border-radius: 8px;
     font-family: inherit; }
   input[type="text"]:focus, input[type="password"]:focus, input[type="url"]:focus,
-  input[type="number"]:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  input[type="number"]:focus, input[type="file"]:focus, textarea:focus {
+    outline: 2px solid var(--accent); outline-offset: -1px; }
   input[type="radio"], input[type="checkbox"] {
     width: auto; height: auto; flex: 0 0 auto; transform: scale(1.2); margin: 0 4px 0 2px;
     accent-color: var(--accent); cursor: pointer; }
@@ -108,7 +110,7 @@
   .progress { height: 4px; background: var(--border); border-radius: 2px; overflow: hidden; margin: 8px 0; }
   .progress > div { height: 100%; background: var(--accent); width: 0%; transition: width .3s ease; }
   /* Live-updating counters/percentages: fixed-width digits, no layout shift. */
-  #progress-status, #connect-status, #esphome-flash-status, .log {
+  #progress-status, #connect-status, #esphome-flash-status, #stock-file-status, .log {
     font-variant-numeric: tabular-nums; }
   /* Cards revealed mid-flow (display:none at load) fade in on first render;
      nothing animates on page load because these start hidden. */
@@ -276,10 +278,28 @@
     </div>
     <p id="esphome-flash-status" class="muted" style="margin-top:10px"></p>
 
+    <hr>
+    <h3>Restore OEM firmware from a local file</h3>
+    <p class="muted">Use an OEM IT-AF-SMT application <code>.bin</code> saved on this phone or computer. The browser uploads it directly to the hub over your LAN, so this path keeps working if QuietCool removes an old download URL. It is not limited to V4.1.</p>
+
+    <label for="stock-file">OEM application firmware (.bin)</label>
+    <input id="stock-file" type="file" accept=".bin,application/octet-stream">
+    <p id="stock-file-info" class="muted">Choose an OTA application image—not a full 4 MB flash dump, bootloader, or ESPHome build.</p>
+
+    <label style="display:flex;align-items:flex-start;gap:7px;margin-top:12px">
+      <input id="stock-file-confirm" type="checkbox">
+      <span>I confirm this file is OEM firmware for the QuietCool IT-AF-SMT. This restore is deliberately marked valid and will not automatically roll back.</span>
+    </label>
+
+    <button id="btn-stock-file" class="danger" style="margin-top:12px">Upload local file &amp; restore OEM</button>
+    <div class="progress" id="stock-file-progress" style="display:none"><div id="stock-file-progress-bar"></div></div>
+    <p id="stock-file-status" class="muted" style="margin-top:10px"></p>
+
     <details>
       <summary>How does this work? / troubleshooting</summary>
       <p class="muted">The button issues a single <code>POST http://&lt;host&gt;/api/flash_url?url=…&amp;md5=…</code> to the device. The device's <code>http_flash_handler</code> component validates the URL+MD5, returns <code>200 OK</code> (body “Accepted…”) immediately, then ~500 ms later kicks off the <code>ota.http_request</code> OTA — pulls the bin, writes it to the inactive OTA slot, and reboots. Ordinary custom images retain normal app-rollback protection. The exact OEM V4.1 URL+MD5 preset instead marks stock VALID before reboot so it stays installed, erases only ESPHome's private NVS namespace, and preserves OEM pairings and settings.</p>
       <p class="muted"><strong>No auth on this endpoint</strong> — matches the device's LAN-trust default (api/ota are also passwordless before Home Assistant adoption pushes per-device secrets). To lock it down, add <code>auth: { username, password }</code> under <code>web_server:</code> in your build.</p>
+      <p class="muted">The local-file button streams a multipart upload to <code>POST /api/restore_stock_file</code>. The hub requires an ESP32 OTA application header and app descriptor, checks that the image fits the inactive 1.875 MB slot, rejects this project's own replacement firmware, then lets ESP-IDF verify the complete image checksum and embedded SHA-256. A QuietCool <code>IT-BLT-ATTICFAN</code> marker is reported as a confidence signal but is not a version whitelist. Only after those checks does the explicit restore path mark the foreign slot valid and erase ESPHome's private NVS namespace.</p>
       <p class="muted"><strong>Common failure modes:</strong></p>
       <ul class="step-list muted">
         <li>"Network error" → device hostname doesn't resolve; try the LAN IP instead. The full mDNS name is required, including the MAC suffix (e.g. <code>quietcool-atticfan-abcdef.local</code>, not just <code>quietcool-atticfan</code>).</li>
@@ -304,6 +324,6 @@
     Source &amp; design: <a style="color:var(--accent)" href="https://github.com/CrazyCoder/quietcool-esphome-native">quietcool-esphome-native</a> · OEM device QuietCool IT-AF-SMT
   </p>
 </main>
-<script src="./app.js?v=3"></script>
+<script src="./app.js?v=4"></script>
 </body>
 </html>

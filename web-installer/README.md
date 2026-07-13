@@ -22,14 +22,14 @@ lifecycle:
    running, this flow no longer serves to change its firmware: the hub still speaks
    the OEM BLE protocol, but its `Upgrade` command refuses QuietCool's firmware
    domains, so it can't be rolled back to stock over BLE — use path 2 instead.
-2. **HTTP flash flow (section at the bottom).** Pushes any firmware URL onto a hub
-   already running the ESPHome firmware. It calls the device's built-in
-   `POST /api/flash_url` endpoint, provided by the `http_flash_handler` component
-   in [`../components/http_flash_handler/`](../components/http_flash_handler/)
-   (which ships host-side validation tests). Use it to roll back to the verified
-   OEM V4.1 image, push a custom build, or test alternative firmware without
-   touching BLE. The known OEM URL+MD5 pair automatically gets the stock-specific
-   slot confirmation and NVS cleanup needed for the restore to stick.
+2. **HTTP flash flow (section at the bottom).** Talks to a hub already running the
+   ESPHome firmware. It can either hand the device a firmware URL through
+   `POST /api/flash_url`, or stream a locally selected OEM application image through
+   `POST /api/restore_stock_file`. Both endpoints come from the
+   `http_flash_handler` component in
+   [`../components/http_flash_handler/`](../components/http_flash_handler/). The
+   local path is version-independent and keeps working if the vendor removes an
+   old firmware URL.
 
 ## Layout
 
@@ -68,11 +68,12 @@ OEM OTA mechanism — only the firmware URL changes.
   won't accept a stock bin over it), so restoring stock goes through the HTTP path below.
 
 To roll a hub that is **already running ESPHome** back to stock, use the **HTTP
-flash** section at the bottom of the page (the `http_flash_handler` endpoint), the
-firmware's own *Restore Stock Firmware* button in Home Assistant, or a UART
-reflash. The OEM `Upgrade` command over BLE deliberately refuses OEM firmware
-domains, so it can't be used to flash stock over an ESPHome hub — that's why
-rollback goes through the HTTP path, not BLE.
+flash** section at the bottom of the page. Choose either the verified V4.1 URL
+preset or a locally saved OEM `.bin`. The same local-file form is built into the
+device at `http://<host>/restore-stock`, so a restore does not depend on this
+installer remaining hosted. The firmware's *Restore Stock Firmware* button in
+Home Assistant and UART are additional paths. The OEM `Upgrade` command over BLE
+deliberately refuses OEM firmware domains, so rollback goes through HTTP, not BLE.
 
 Factory restore via this page rewrites only the app partition and erases only the
 private `esphome` NVS namespace during final shutdown. The OEM `hx_list` namespace
@@ -128,6 +129,29 @@ app-rollback protection. For the exact verified OEM V4.1 URL+MD5 pair, the handl
 marks the stock slot VALID before reboot because stock cannot self-confirm under this
 build's rollback-enabled bootloader; automatic rollback is deliberately disabled for
 that explicit restore.
+
+#### Local OEM file restore
+
+The same bottom card accepts a local OEM IT-AF-SMT application `.bin`. The browser
+preflights its ESP32 header, app descriptor, target chip, size, project name, and
+optional `IT-BLT-ATTICFAN` confidence marker, then uploads it as multipart data to:
+
+```text
+POST http://<host>/api/restore_stock_file?confirm=RESTORE_OEM_FIRMWARE
+```
+
+The device independently repeats the structural and size checks while streaming
+directly into the inactive slot. ESP-IDF verifies the complete image checksum,
+embedded SHA-256, segments, and chip compatibility before the handler marks the new
+slot valid. The known marker is deliberately informational rather than a whitelist:
+a future legitimate OEM release remains usable even if its version, digest, project
+name, or embedded strings change. This explicit path rejects this project's own
+`quietcool-atticfan` image because replacement-firmware updates must retain ordinary
+rollback protection.
+
+For a fully self-contained flow, browse directly to `http://<host>/restore-stock`.
+The device serves a minimal multipart upload form with the same validation and
+finalization behavior.
 
 **Mixed-content gotcha:** if you're loading this page over HTTPS (e.g.
 `https://<user>.github.io/<repo>/`) and the device serves `http://`, modern

@@ -699,6 +699,160 @@ function fillOemV41Defaults() {
   status.className = "muted";
 }
 
+// ----------------------------------------------------------------------
+// Version-independent local OEM restore. The selected file is uploaded
+// directly to the hub; the firmware endpoint performs the authoritative
+// streaming validation before disabling rollback. These browser checks give
+// immediate feedback and avoid sending obvious bootloaders/full-flash dumps.
+// ----------------------------------------------------------------------
+
+const OEM_OTA_SLOT_SIZE = 0x1e0000;
+const OEM_PRODUCT_MARKER = "IT-BLT-ATTICFAN";
+
+function bytesContainAscii(bytes, text) {
+  const wanted = new TextEncoder().encode(text);
+  outer: for (let i = 0; i + wanted.length <= bytes.length; ++i) {
+    for (let j = 0; j < wanted.length; ++j) {
+      if (bytes[i + j] !== wanted[j]) continue outer;
+    }
+    return true;
+  }
+  return false;
+}
+
+async function inspectLocalStockFile(file) {
+  if (!file) throw new Error("Choose an OEM firmware .bin file");
+  if (file.size < 0x70) throw new Error("File is too short to be an ESP32 application image");
+  if (file.size > OEM_OTA_SLOT_SIZE) {
+    throw new Error(`File is too large (${file.size.toLocaleString()} bytes; OTA slot is ${OEM_OTA_SLOT_SIZE.toLocaleString()})`);
+  }
+
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  if (bytes[0] !== 0xe9) throw new Error("Missing ESP32 E9 application-image header");
+  if (bytes[1] < 1 || bytes[1] > 16) throw new Error("Invalid ESP32 segment count");
+  if (bytes[12] !== 0 || bytes[13] !== 0) throw new Error("Image targets a chip other than the original ESP32");
+  if (bytes[0x20] !== 0x32 || bytes[0x21] !== 0x54 || bytes[0x22] !== 0xcd || bytes[0x23] !== 0xab) {
+    throw new Error("Missing ESP-IDF application descriptor—choose an OTA app image, not a full flash dump or bootloader");
+  }
+
+  let projectEnd = 0x50;
+  while (projectEnd < 0x70 && bytes[projectEnd] !== 0) ++projectEnd;
+  const project = new TextDecoder().decode(bytes.slice(0x50, projectEnd));
+  if (project === "quietcool-atticfan") {
+    throw new Error("This is replacement firmware; use the normal firmware URL/upload path so rollback stays enabled");
+  }
+
+  const markerSeen = bytesContainAscii(bytes, OEM_PRODUCT_MARKER);
+  let sha256 = null;
+  if (globalThis.crypto?.subtle) {
+    const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+    sha256 = Array.from(digest, b => b.toString(16).padStart(2, "0")).join("");
+  }
+  return { project: project || "(empty)", markerSeen, sha256 };
+}
+
+async function showLocalStockFileInfo() {
+  const file = document.getElementById("stock-file").files[0];
+  const status = document.getElementById("stock-file-info");
+  if (!file) {
+    status.textContent = "Choose an OTA application image—not a full 4 MB flash dump, bootloader, or ESPHome build.";
+    status.className = "muted";
+    return;
+  }
+  status.textContent = "Inspecting file…";
+  status.className = "muted";
+  try {
+    const info = await inspectLocalStockFile(file);
+    const marker = info.markerSeen
+      ? `<span class="pill ok">QuietCool marker found</span>`
+      : `<span class="pill warn">No known QuietCool marker</span>`;
+    const digest = info.sha256 ? `<br><small>SHA-256: <code>${info.sha256}</code></small>` : "";
+    status.innerHTML = `<span class="pill ok">Valid ESP32 app</span> ${marker} ` +
+      `${file.size.toLocaleString()} bytes · project <code>${escapeHtml(info.project)}</code>${digest}`;
+    status.className = info.markerSeen ? "ok" : "warn";
+  } catch (e) {
+    status.innerHTML = `<span class="pill err">Rejected</span> ${escapeHtml(e.message)}`;
+    status.className = "err";
+  }
+}
+
+async function runLocalStockRestore() {
+  const host = document.getElementById("esphome-host").value.trim();
+  const file = document.getElementById("stock-file").files[0];
+  const confirmed = document.getElementById("stock-file-confirm").checked;
+  const status = document.getElementById("stock-file-status");
+  const progress = document.getElementById("stock-file-progress");
+  const progressBar = document.getElementById("stock-file-progress-bar");
+  const btn = document.getElementById("btn-stock-file");
+
+  if (!host) {
+    status.innerHTML = '<span class="pill err">Validation</span> Device hostname or IP is required above';
+    status.className = "err";
+    return;
+  }
+  if (!confirmed) {
+    status.innerHTML = '<span class="pill err">Confirmation required</span> Confirm that this is OEM IT-AF-SMT firmware';
+    status.className = "err";
+    return;
+  }
+
+  try {
+    const info = await inspectLocalStockFile(file);
+    if (!info.markerSeen) {
+      const proceed = window.confirm(
+        "This is a structurally valid ESP32 application, but the known IT-BLT-ATTICFAN marker was not found.\n\n" +
+        "Only continue if you obtained this file as OEM firmware for the QuietCool IT-AF-SMT."
+      );
+      if (!proceed) return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = "Uploading…";
+    progress.style.display = "block";
+    progressBar.style.width = "0%";
+    status.innerHTML = `<span class="pill">…</span> Uploading ${escapeHtml(file.name)} to ${escapeHtml(host)}`;
+    status.className = "muted";
+
+    const endpoint = `http://${host}/api/restore_stock_file?confirm=RESTORE_OEM_FIRMWARE`;
+    const body = new FormData();
+    body.append("firmware", file, file.name);
+
+    await new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", endpoint);
+      xhr.timeout = 180000;
+      xhr.upload.addEventListener("progress", event => {
+        if (!event.lengthComputable) return;
+        const percent = Math.min(100, Math.round(event.loaded * 100 / event.total));
+        progressBar.style.width = `${percent}%`;
+        status.innerHTML = `<span class="pill">${percent}%</span> Uploading ${escapeHtml(file.name)}…`;
+      });
+      xhr.addEventListener("load", () => {
+        const response = (xhr.responseText || "").trim();
+        if (xhr.status >= 200 && xhr.status < 300) {
+          progressBar.style.width = "100%";
+          status.innerHTML = `<span class="pill ok">Accepted</span> ${escapeHtml(response)}<br>` +
+            `<small class="muted">OEM settings and pairings are preserved. The web UI will disappear when the hub reboots into stock.</small>`;
+          status.className = "ok";
+          try { localStorage.setItem("qc_esphome_host", host); } catch (e) {}
+          resolve();
+        } else {
+          reject(new Error(response || `Device returned HTTP ${xhr.status}`));
+        }
+      });
+      xhr.addEventListener("error", () => reject(new Error("Network error while uploading to the hub")));
+      xhr.addEventListener("timeout", () => reject(new Error("Upload timed out")));
+      xhr.send(body);
+    });
+  } catch (e) {
+    status.innerHTML = `<span class="pill err">Restore failed</span> ${escapeHtml(e.message)}`;
+    status.className = "err";
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Upload local file & restore OEM";
+  }
+}
+
 // Trivial HTML escaper for status messages (response bodies can contain
 // arbitrary text from the device).
 function escapeHtml(s) {
@@ -834,6 +988,8 @@ window.addEventListener("DOMContentLoaded", () => {
   } catch (e) {}
   document.getElementById("btn-esphome-flash").addEventListener("click", runEsphomeHttpFlash);
   document.getElementById("btn-fill-oem-v41").addEventListener("click", fillOemV41Defaults);
+  document.getElementById("stock-file").addEventListener("change", showLocalStockFileInfo);
+  document.getElementById("btn-stock-file").addEventListener("click", runLocalStockRestore);
 
   if (!checkCompat()) return;
 

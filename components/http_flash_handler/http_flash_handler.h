@@ -1,7 +1,6 @@
-// HttpFlashHandler — registers a custom POST /api/flash_url endpoint on
-// the device's web_server. Lets a browser (or curl) hand the device an
-// arbitrary firmware URL + optional MD5 to flash via the existing
-// ota.platform: http_request component.
+// HttpFlashHandler — registers two custom endpoints on the device web server:
+//   POST /api/flash_url         download a firmware URL through http_request
+//   POST /api/restore_stock_file upload a user-supplied OEM app image
 //
 // Wiring contract (set in YAML via this component's Python schema):
 //   - `web_server_base` must be enabled (top-level web_server: { ... }).
@@ -71,7 +70,14 @@ class HttpFlashHandler : public Component, public ota::OTAStateListener {
   void on_ota_state(ota::OTAState state, float progress, uint8_t error) override;
   void on_powerdown() override;
 
+  // Called after a local stock upload has passed structural checks and the
+  // ESP-IDF OTA backend has verified and selected it. Unlike on_ota_state(),
+  // this path owns its OTA backend and therefore finalizes synchronously.
+  bool finalize_uploaded_stock();
+  void schedule_uploaded_stock_reboot();
+
  protected:
+  bool confirm_new_firmware_slot_();
   http_request::OtaHttpRequestComponent *ota_ = nullptr;
   // One-shot flag set by request_rollback_confirm(); consumed/cleared in
   // on_ota_state(). Default false so ordinary OTAs keep app-rollback.

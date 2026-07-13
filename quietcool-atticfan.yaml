@@ -1175,11 +1175,13 @@ web_server:
   local: true
 
 # ====================================================================
-# POST /api/flash_url?url=<url>&md5=<32hex> — flashes arbitrary firmware
-# on top of this ESPHome firmware. Used by the Web Installer to push stock
-# OEM bins or alternative custom builds without HA. Input validation
-# lives in components/http_flash_handler/http_flash_logic.h (27 host
-# tests covering scheme + MD5 length/charset + whitespace).
+# Firmware web endpoints for a hub already running this build:
+#   POST /api/flash_url              download a URL through http_request
+#   GET  /restore-stock              self-contained local OEM upload page
+#   POST /api/restore_stock_file     streamed, version-neutral OEM restore
+# The local path validates the ESP32 OTA application envelope and target-slot
+# fit before ESP-IDF performs full image verification. Only that explicit OEM
+# path bypasses app rollback; normal web-server OTA remains unchanged.
 # `ota_id: http_ota` references the `id:` attached to ota.http_request
 # in creds-{dev,dist}.yaml — the handler calls set_url/set_md5/flash()
 # on that component, which handles the actual OTA + reboot.

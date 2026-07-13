@@ -1,6 +1,9 @@
 #include "http_flash_handler.h"
 #include "http_flash_logic.h"
+#include "stock_upload_logic.h"
 #include "esphome/core/log.h"
+#include "esphome/core/application.h"
+#include "esphome/components/ota/ota_backend_factory.h"
 #include "esphome/components/web_server_base/web_server_base.h"
 
 #include <esp_ota_ops.h>
@@ -64,6 +67,165 @@ class FlashUrlHandler : public AsyncWebHandler {
   HttpFlashHandler *parent_;
 };
 
+// Dedicated local-file restore path. It intentionally does not replace or
+// intercept ESPHome's built-in /update route: normal replacement-firmware
+// uploads must retain app rollback. This endpoint is an explicit assertion by
+// the user that the file is OEM firmware and may therefore be made permanent.
+class StockFileUploadHandler : public AsyncWebHandler {
+ public:
+  explicit StockFileUploadHandler(HttpFlashHandler *parent) : parent_(parent) {}
+
+  bool canHandle(AsyncWebServerRequest *r) const override {
+    char url_buf[AsyncWebServerRequest::URL_BUF_SIZE];
+    const auto url = r->url_to(url_buf);
+    return (r->method() == HTTP_GET && url == "/restore-stock") ||
+           (r->method() == HTTP_POST && url == "/api/restore_stock_file");
+  }
+
+  // NOLINTNEXTLINE(readability-identifier-naming)
+  bool isRequestHandlerTrivial() const override { return false; }
+
+  void handleUpload(AsyncWebServerRequest *request, const std::string &filename,
+                    size_t index, uint8_t *data, size_t len, bool final) override {
+    if (index == 0 && len > 0) this->begin_upload_(request, filename);
+    if (!upload_active_) return;
+
+    if (len > 0) {
+      if (inspector_.total_size() + len > partition_size_) {
+        this->fail_(qc::StockUploadInspector::status_message(qc::StockUploadStatus::TooLarge));
+        return;
+      }
+      inspector_.consume(data, len);
+      const auto error = backend_->write(data, len);
+      if (error != ota::OTA_RESPONSE_OK) {
+        this->fail_("ESP-IDF rejected data while writing the inactive OTA slot");
+        return;
+      }
+    }
+
+    if (!final || !upload_active_) return;
+
+    const auto status = inspector_.validate(partition_size_);
+    if (status != qc::StockUploadStatus::Ok) {
+      this->fail_(qc::StockUploadInspector::status_message(status));
+      return;
+    }
+
+    const std::string project = inspector_.project_name();
+    const bool marker_seen = inspector_.quietcool_marker_seen();
+    const auto error = backend_->end();
+    backend_.reset();
+    upload_active_ = false;
+    if (error != ota::OTA_RESPONSE_OK) {
+      result_message_ = "ESP-IDF image verification failed; the running firmware was not changed";
+      ESP_LOGE(TAG, "Local OEM upload rejected by esp_ota_end (error=%u)", static_cast<unsigned>(error));
+      return;
+    }
+
+    if (!parent_->finalize_uploaded_stock()) {
+      result_message_ = "Image was written but could not be marked valid; staying on current firmware";
+      return;
+    }
+
+    upload_success_ = true;
+    result_message_ = "OEM restore accepted; image verified and device will reboot";
+    ESP_LOGW(TAG,
+             "Local OEM restore accepted: bytes=%u project='%s' quietcool_marker=%s",
+             static_cast<unsigned>(inspector_.total_size()), project.c_str(), YESNO(marker_seen));
+    parent_->schedule_uploaded_stock_reboot();
+  }
+
+  void handleRequest(AsyncWebServerRequest *request) override {
+    if (request->method() == HTTP_GET) {
+      static const char PAGE[] = R"html(<!doctype html>
+<html><head><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>QuietCool OEM restore</title><style>
+body{font:16px system-ui;max-width:680px;margin:30px auto;padding:0 16px;line-height:1.45}
+input,button{font:inherit;margin:8px 0;padding:10px;max-width:100%}button{display:block}
+.warning{border-left:4px solid #c60;padding:10px;background:#fff4df}
+</style></head><body><h1>Restore QuietCool OEM firmware</h1>
+<p>Upload an OEM IT-AF-SMT <strong>application .bin</strong> saved on this device.
+This local path does not depend on QuietCool keeping any download URL online.</p>
+<div class="warning"><strong>Permanent foreign-firmware restore:</strong> the uploaded
+slot is marked valid and will not automatically roll back. Use only OEM firmware for
+the QuietCool IT-AF-SMT—not a full-flash dump, bootloader, or ESPHome image.</div>
+<form method="post" enctype="multipart/form-data"
+ action="/api/restore_stock_file?confirm=RESTORE_OEM_FIRMWARE">
+<p><input type="file" name="firmware" accept=".bin,application/octet-stream" required></p>
+<label><input type="checkbox" required> I confirm this is OEM firmware for the
+QuietCool IT-AF-SMT.</label>
+<button type="submit">Upload and restore OEM firmware</button></form>
+<p>The hub validates the ESP32 application structure, target chip, OTA-slot size,
+and complete ESP-IDF image integrity before changing the boot partition. OEM pairings
+and settings are preserved.</p></body></html>)html";
+      request->send(200, "text/html", PAGE);
+      return;
+    }
+
+    const int status = upload_success_ ? 200 : 409;
+    const char *message = result_message_.empty() ? "No firmware file received" : result_message_.c_str();
+    request->send(status, "text/plain", message);
+  }
+
+ protected:
+  void begin_upload_(AsyncWebServerRequest *request, const std::string &filename) {
+    if (backend_) backend_->abort();
+    backend_.reset();
+    inspector_.reset();
+    partition_size_ = 0;
+    upload_active_ = false;
+    upload_success_ = false;
+    result_message_.clear();
+
+    const std::string confirmation = request->hasParam("confirm") ? request->arg("confirm") : "";
+    if (confirmation != "RESTORE_OEM_FIRMWARE") {
+      result_message_ = "Explicit OEM restore confirmation is required";
+      ESP_LOGW(TAG, "Rejected local OEM upload without confirmation");
+      return;
+    }
+
+    const esp_partition_t *target = esp_ota_get_next_update_partition(nullptr);
+    if (target == nullptr) {
+      result_message_ = "No inactive OTA partition is available";
+      return;
+    }
+    partition_size_ = target->size;
+
+    backend_ = ota::make_ota_backend();
+    if (!backend_) {
+      result_message_ = "Could not initialize the ESP-IDF OTA backend";
+      return;
+    }
+    const auto error = backend_->begin(0);
+    if (error != ota::OTA_RESPONSE_OK) {
+      backend_.reset();
+      result_message_ = "Could not begin writing the inactive OTA partition";
+      return;
+    }
+
+    upload_active_ = true;
+    ESP_LOGW(TAG, "Local OEM restore upload started: filename='%s' target=%s@0x%06" PRIx32 " size=%u",
+             filename.c_str(), target->label, target->address, static_cast<unsigned>(target->size));
+  }
+
+  void fail_(const char *message) {
+    if (backend_) backend_->abort();
+    backend_.reset();
+    upload_active_ = false;
+    upload_success_ = false;
+    result_message_ = message;
+    ESP_LOGE(TAG, "Local OEM upload rejected: %s", message);
+  }
+
+  HttpFlashHandler *parent_;
+  ota::OTABackendPtr backend_{nullptr};
+  qc::StockUploadInspector inspector_;
+  size_t partition_size_{0};
+  bool upload_active_{false};
+  bool upload_success_{false};
+  std::string result_message_;
+};
+
 void HttpFlashHandler::setup() {
   if (web_server_base::global_web_server_base == nullptr) {
     ESP_LOGE(TAG, "web_server_base not initialized — HTTP flash endpoint unavailable");
@@ -77,7 +239,28 @@ void HttpFlashHandler::setup() {
   // known foreign-firmware slot valid before the reboot (see on_ota_state).
   ota_->add_state_listener(this);
   web_server_base::global_web_server_base->add_handler(new FlashUrlHandler(this));
-  ESP_LOGCONFIG(TAG, "Registered POST /api/flash_url");
+  web_server_base::global_web_server_base->add_handler(new StockFileUploadHandler(this));
+  ESP_LOGCONFIG(TAG, "Registered POST /api/flash_url and POST /api/restore_stock_file");
+}
+
+bool HttpFlashHandler::confirm_new_firmware_slot_() {
+  // OTA backend end() has called esp_ota_set_boot_partition() on the newly
+  // written slot. Although it is not the running partition yet, it is now the
+  // active otadata entry in NEW state, which this API changes to VALID.
+  const esp_err_t err = esp_ota_mark_app_valid_cancel_rollback();
+  if (err == ESP_OK) {
+    ESP_LOGW(TAG, "Confirmed new firmware slot VALID — app rollback will keep it");
+    return true;
+  }
+
+  ESP_LOGE(TAG, "Could not confirm new slot (err=0x%X); restoring current boot selection", err);
+  const esp_partition_t *running = esp_ota_get_running_partition();
+  if (running != nullptr) {
+    const esp_err_t restore_err = esp_ota_set_boot_partition(running);
+    if (restore_err != ESP_OK)
+      ESP_LOGE(TAG, "Could not restore running boot partition (err=0x%X)", restore_err);
+  }
+  return false;
 }
 
 void HttpFlashHandler::on_ota_state(ota::OTAState state, float progress, uint8_t error) {
@@ -94,12 +277,7 @@ void HttpFlashHandler::on_ota_state(ota::OTAState state, float progress, uint8_t
         // to VALID. The bootloader then boots it as an ordinary image with no
         // pending-verify — foreign firmware that can't self-confirm stays put
         // instead of rolling back to us. Runs just before App.safe_reboot().
-        esp_err_t err = esp_ota_mark_app_valid_cancel_rollback();
-        if (err == ESP_OK) {
-          ESP_LOGW(TAG, "Confirmed new firmware slot VALID — app-rollback will keep it");
-        } else {
-          ESP_LOGE(TAG, "Could not confirm new slot (err=0x%X); it may roll back to us", err);
-        }
+        if (!this->confirm_new_firmware_slot_()) this->erase_esphome_on_powerdown_ = false;
       }
       break;
     case ota::OTA_ERROR:
@@ -112,6 +290,19 @@ void HttpFlashHandler::on_ota_state(ota::OTAState state, float progress, uint8_t
     default:
       break;
   }
+}
+
+bool HttpFlashHandler::finalize_uploaded_stock() {
+  if (!this->confirm_new_firmware_slot_()) return false;
+  this->erase_esphome_on_powerdown_ = true;
+  return true;
+}
+
+void HttpFlashHandler::schedule_uploaded_stock_reboot() {
+  this->set_timeout("stock-file-reboot", 1000, []() {
+    ESP_LOGW(TAG, "Rebooting into locally uploaded OEM firmware");
+    App.safe_reboot();
+  });
 }
 
 void HttpFlashHandler::on_powerdown() {
@@ -149,6 +340,8 @@ void HttpFlashHandler::on_powerdown() {
 void HttpFlashHandler::dump_config() {
   ESP_LOGCONFIG(TAG, "QuietCool HTTP flash handler:");
   ESP_LOGCONFIG(TAG, "  Endpoint: POST /api/flash_url?url=<url>&md5=<32hex>");
+  ESP_LOGCONFIG(TAG, "  Restore page: GET /restore-stock");
+  ESP_LOGCONFIG(TAG, "  Endpoint: POST /api/restore_stock_file?confirm=RESTORE_OEM_FIRMWARE");
   ESP_LOGCONFIG(TAG, "  web_server_base:  %s",
                 web_server_base::global_web_server_base ? "OK" : "MISSING");
   ESP_LOGCONFIG(TAG, "  ota.http_request: %s", ota_ ? "OK" : "MISSING");

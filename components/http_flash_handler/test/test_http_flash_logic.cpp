@@ -7,9 +7,12 @@
 
 #include "test_utils.h"
 #include "../http_flash_logic.h"
+#include "../stock_upload_logic.h"
 
 using qc::FlashRequestStatus;
 using qc::HttpFlashLogic;
+using qc::StockUploadInspector;
+using qc::StockUploadStatus;
 
 namespace qc {
 inline const char* status_name(FlashRequestStatus s) {
@@ -24,6 +27,9 @@ inline const char* status_name(FlashRequestStatus s) {
 }
 inline std::ostream& operator<<(std::ostream& os, FlashRequestStatus s) {
   return os << status_name(s);
+}
+inline std::ostream& operator<<(std::ostream& os, StockUploadStatus s) {
+  return os << StockUploadInspector::status_message(s);
 }
 }  // namespace qc
 
@@ -243,6 +249,119 @@ TEST("trim: whitespace-only stays empty") {
 
 TEST("trim: no whitespace stays unchanged") {
   REQUIRE_EQ(HttpFlashLogic::trim("hello"), std::string("hello"));
+}
+
+// ============================================================================
+// Local stock-upload inspection. The OTA backend performs the cryptographic
+// and segment validation; this streaming preflight rejects clearly wrong file
+// types and prevents replacement firmware from bypassing normal rollback.
+// ============================================================================
+
+static std::vector<uint8_t> make_app_image(std::string_view project = "sec_gatts_demo",
+                                           size_t size = 512) {
+  std::vector<uint8_t> image(size, 0);
+  image[0] = 0xE9;
+  image[1] = 6;
+  image[0x20] = 0x32;
+  image[0x21] = 0x54;
+  image[0x22] = 0xCD;
+  image[0x23] = 0xAB;
+  for (size_t i = 0; i < project.size() && i < StockUploadInspector::PROJECT_NAME_SIZE; ++i)
+    image[StockUploadInspector::PROJECT_NAME_OFFSET + i] = static_cast<uint8_t>(project[i]);
+  return image;
+}
+
+TEST("stock upload: version-independent ESP32 app image -> Ok") {
+  auto image = make_app_image("some_future_oem_project");
+  StockUploadInspector inspector;
+  inspector.consume(image.data(), image.size());
+  REQUIRE_EQ(inspector.validate(0x1E0000), StockUploadStatus::Ok);
+  REQUIRE_EQ(inspector.project_name(), std::string("some_future_oem_project"));
+}
+
+TEST("stock upload: stock V4.1 generic project name -> Ok") {
+  auto image = make_app_image("sec_gatts_demo");
+  StockUploadInspector inspector;
+  inspector.consume(image.data(), image.size());
+  REQUIRE_EQ(inspector.validate(0x1E0000), StockUploadStatus::Ok);
+}
+
+TEST("stock upload: replacement project is rejected") {
+  auto image = make_app_image("quietcool-atticfan");
+  StockUploadInspector inspector;
+  inspector.consume(image.data(), image.size());
+  REQUIRE_EQ(inspector.validate(0x1E0000), StockUploadStatus::ReplacementFirmware);
+}
+
+TEST("stock upload: full-flash or bootloader image without app descriptor is rejected") {
+  auto image = make_app_image();
+  image[0x20] = 0;
+  StockUploadInspector inspector;
+  inspector.consume(image.data(), image.size());
+  REQUIRE_EQ(inspector.validate(0x1E0000), StockUploadStatus::MissingAppDescriptor);
+}
+
+TEST("stock upload: wrong image magic is rejected") {
+  auto image = make_app_image();
+  image[0] = 0;
+  StockUploadInspector inspector;
+  inspector.consume(image.data(), image.size());
+  REQUIRE_EQ(inspector.validate(0x1E0000), StockUploadStatus::InvalidImageMagic);
+}
+
+TEST("stock upload: image for another chip is rejected") {
+  auto image = make_app_image();
+  image[12] = 9;
+  StockUploadInspector inspector;
+  inspector.consume(image.data(), image.size());
+  REQUIRE_EQ(inspector.validate(0x1E0000), StockUploadStatus::WrongChip);
+}
+
+TEST("stock upload: image larger than OTA slot is rejected") {
+  auto image = make_app_image();
+  StockUploadInspector inspector;
+  inspector.consume(image.data(), image.size());
+  REQUIRE_EQ(inspector.validate(image.size() - 1), StockUploadStatus::TooLarge);
+}
+
+TEST("stock upload: truncated image is rejected") {
+  auto image = make_app_image();
+  StockUploadInspector inspector;
+  inspector.consume(image.data(), 40);
+  REQUIRE_EQ(inspector.validate(0x1E0000), StockUploadStatus::TooShort);
+}
+
+TEST("stock upload: QuietCool marker is found across chunk boundaries") {
+  auto image = make_app_image();
+  const std::string marker(StockUploadInspector::QUIETCOOL_MARKER);
+  image.insert(image.end(), marker.begin(), marker.end());
+  StockUploadInspector inspector;
+  const size_t split = image.size() - marker.size() + 5;
+  inspector.consume(image.data(), split);
+  REQUIRE(!inspector.quietcool_marker_seen());
+  inspector.consume(image.data() + split, image.size() - split);
+  REQUIRE(inspector.quietcool_marker_seen());
+  REQUIRE_EQ(inspector.validate(0x1E0000), StockUploadStatus::Ok);
+}
+
+TEST("stock upload: QuietCool marker is informational, not a version whitelist") {
+  auto image = make_app_image("future_vendor_build");
+  StockUploadInspector inspector;
+  inspector.consume(image.data(), image.size());
+  REQUIRE(!inspector.quietcool_marker_seen());
+  REQUIRE_EQ(inspector.validate(0x1E0000), StockUploadStatus::Ok);
+}
+
+TEST("stock upload: reset clears streaming state") {
+  auto image = make_app_image();
+  const std::string marker(StockUploadInspector::QUIETCOOL_MARKER);
+  image.insert(image.end(), marker.begin(), marker.end());
+  StockUploadInspector inspector;
+  inspector.consume(image.data(), image.size());
+  REQUIRE(inspector.quietcool_marker_seen());
+  inspector.reset();
+  REQUIRE_EQ(inspector.total_size(), 0u);
+  REQUIRE(!inspector.quietcool_marker_seen());
 }
 
 int main() { return tu::run_all(); }
