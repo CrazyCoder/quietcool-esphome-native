@@ -59,6 +59,14 @@
   button:disabled { background: #3a4854; color: #6a7888; cursor: not-allowed; }
   button.secondary { background: transparent; color: var(--fg); border: 1px solid var(--border); }
   button.secondary:active:not(:disabled) { background: rgba(255,255,255,.06); }
+  button.improv-action { background: var(--warn); color: #241500; border: 2px solid #ffd180;
+    box-shadow: 0 3px 10px rgba(255,183,74,.25); }
+  button.improv-action:active:not(:disabled) { background: #e6a23c; }
+  button.improv-action:disabled { background: #3a4854; color: #6a7888;
+    border-color: #4b5965; box-shadow: none; }
+  button.improv-action .button-title { display: block; font-size: 17px; font-weight: 700; }
+  button.improv-action .button-detail { display: block; margin-top: 2px; font-size: 12px;
+    font-weight: 600; opacity: .8; }
   button.danger { background: var(--err); color: #2c0000; }
   button.danger:active:not(:disabled) { background: #e05252; }
   input[type="text"], input[type="password"], input[type="url"], input[type="number"], textarea {
@@ -196,10 +204,14 @@
     <input id="pwd" type="password" placeholder="••••••••" autocomplete="off" autocapitalize="off" spellcheck="false">
 
     <div class="callout">
-      <strong>Already seeing an Improv setup device?</strong> If replacement
-      firmware is running but offline, provision it directly—no OEM pair ID or
-      firmware flash is needed.
-      <button id="btn-improv-wifi" class="secondary" style="margin-top:10px">Provision via Improv-BLE</button>
+      <strong>Replacement firmware recovery</strong><br>
+      If the hub is offline and advertising an Improv setup device, use this
+      recovery action. It only sends the Wi-Fi credentials above—it does not use
+      an OEM pair ID or flash firmware.
+      <button id="btn-improv-wifi" class="improv-action" style="margin-top:10px">
+        <span class="button-title">📶 Connect &amp; provision Wi-Fi</span>
+        <span class="button-detail">via Improv-BLE · no firmware flash</span>
+      </button>
     </div>
 
     <h2 style="margin-top:18px">5. Firmware URL</h2>
