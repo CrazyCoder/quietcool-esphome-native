@@ -16,6 +16,9 @@
 #include "esphome/components/http_request/ota/ota_http_request.h"
 #include "esphome/components/ota/ota_backend.h"
 
+#include <functional>
+#include <utility>
+
 namespace esphome {
 namespace quietcool {
 
@@ -74,7 +77,11 @@ class HttpFlashHandler : public Component, public ota::OTAStateListener {
   // ESP-IDF OTA backend has verified and selected it. Unlike on_ota_state(),
   // this path owns its OTA backend and therefore finalizes synchronously.
   bool finalize_uploaded_stock();
+  bool cancel_uploaded_stock();
   void schedule_uploaded_stock_reboot();
+  void schedule_stock_upload_timeout(std::function<void()> &&callback) {
+    this->set_timeout("stock-file-upload-timeout", 60000, std::move(callback));
+  }
 
  protected:
   bool confirm_new_firmware_slot_();

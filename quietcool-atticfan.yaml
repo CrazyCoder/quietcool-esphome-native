@@ -1165,10 +1165,10 @@ http_request:
 # modern web_server (ESPHome 2024.10+) — entity-aware REST endpoints,
 # Server-Sent Events for live state, mobile-friendly UI. `local: true`
 # serves the JS/CSS bundle from device flash (~80 KB) instead of jsDelivr
-# CDN, so an offline LAN still works. No auth: matches the dist build's
-# overall LAN-trust model (api/ota are also passwordless until the HA
-# adoption flow pushes per-device secrets). To lock it down, add
-# `auth: { username, password }` in creds-dev.yaml.
+# CDN, so an offline LAN still works. No auth is an intentional LAN-trust
+# default. HA adoption adds API/OTA credentials but does not add web-server
+# authentication; users who want HTTP endpoints protected can add ESPHome's
+# `auth: { username, password }` here (or from their adopted wrapper).
 # ====================================================================
 web_server:
   version: 3

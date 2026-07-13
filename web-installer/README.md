@@ -149,6 +149,14 @@ name, or embedded strings change. This explicit path rejects this project's own
 `quietcool-atticfan` image because replacement-firmware updates must retain ordinary
 rollback protection.
 
+The fixed image prefix is checked before the OTA backend erases the inactive slot.
+Slot confirmation and reboot are deferred until the complete multipart request has
+finished, multi-file requests are rejected, and an abandoned upload is aborted after
+60 seconds. The endpoint follows the firmware's intentional LAN-trust default; Home
+Assistant adoption secures API/OTA but does not add web-server authentication. Add
+ESPHome `web_server.auth` in a custom or adopted build when HTTP authentication is
+desired.
+
 For a fully self-contained flow, browse directly to `http://<host>/restore-stock`.
 The device serves a minimal multipart upload form with the same validation and
 finalization behavior.

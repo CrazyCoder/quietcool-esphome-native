@@ -73,6 +73,15 @@ class StockUploadInspector {
     if (prefix_size_ < PREFIX_SIZE) return StockUploadStatus::TooShort;
     if (partition_size == 0 || total_size_ > partition_size) return StockUploadStatus::TooLarge;
 
+    return this->validate_prefix();
+  }
+
+  // Validate only the fixed application header/descriptor prefix. Upload
+  // handlers can call this before opening an OTA backend, avoiding an erase of
+  // the inactive slot for an obviously incompatible file.
+  StockUploadStatus validate_prefix() const {
+    if (prefix_size_ < PREFIX_SIZE) return StockUploadStatus::TooShort;
+
     // esp_image_header_t: magic, segment_count, ... chip_id at bytes 12-13.
     if (prefix_[0] != 0xE9) return StockUploadStatus::InvalidImageMagic;
     if (prefix_[1] == 0 || prefix_[1] > 16) return StockUploadStatus::InvalidSegmentCount;

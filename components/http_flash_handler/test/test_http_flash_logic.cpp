@@ -291,6 +291,7 @@ TEST("stock upload: replacement project is rejected") {
   StockUploadInspector inspector;
   inspector.consume(image.data(), image.size());
   REQUIRE_EQ(inspector.validate(0x1E0000), StockUploadStatus::ReplacementFirmware);
+  REQUIRE_EQ(inspector.validate_prefix(), StockUploadStatus::ReplacementFirmware);
 }
 
 TEST("stock upload: full-flash or bootloader image without app descriptor is rejected") {
@@ -329,6 +330,15 @@ TEST("stock upload: truncated image is rejected") {
   StockUploadInspector inspector;
   inspector.consume(image.data(), 40);
   REQUIRE_EQ(inspector.validate(0x1E0000), StockUploadStatus::TooShort);
+  REQUIRE_EQ(inspector.validate_prefix(), StockUploadStatus::TooShort);
+}
+
+TEST("stock upload: valid prefix can be accepted before the complete image arrives") {
+  auto image = make_app_image("sec_gatts_demo");
+  StockUploadInspector inspector;
+  inspector.consume(image.data(), StockUploadInspector::PREFIX_SIZE);
+  REQUIRE_EQ(inspector.validate_prefix(), StockUploadStatus::Ok);
+  REQUIRE_EQ(inspector.validate(StockUploadInspector::PREFIX_SIZE - 1), StockUploadStatus::TooLarge);
 }
 
 TEST("stock upload: QuietCool marker is found across chunk boundaries") {

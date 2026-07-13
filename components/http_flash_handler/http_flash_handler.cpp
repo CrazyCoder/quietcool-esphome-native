@@ -9,6 +9,9 @@
 #include <esp_ota_ops.h>
 #include <nvs.h>
 
+#include <algorithm>
+#include <cstring>
+
 namespace esphome {
 namespace quietcool {
 
@@ -88,22 +91,48 @@ class StockFileUploadHandler : public AsyncWebHandler {
   void handleUpload(AsyncWebServerRequest *request, const std::string &filename,
                     size_t index, uint8_t *data, size_t len, bool final) override {
     if (index == 0 && len > 0) this->begin_upload_(request, filename);
-    if (!upload_active_) return;
+    if (!upload_active_) {
+      if (final && file_part_started_) file_part_finished_ = true;
+      return;
+    }
 
     if (len > 0) {
       if (inspector_.total_size() + len > partition_size_) {
         this->fail_(qc::StockUploadInspector::status_message(qc::StockUploadStatus::TooLarge));
         return;
       }
-      inspector_.consume(data, len);
-      const auto error = backend_->write(data, len);
-      if (error != ota::OTA_RESPONSE_OK) {
-        this->fail_("ESP-IDF rejected data while writing the inactive OTA slot");
-        return;
+
+      size_t offset = 0;
+      if (!backend_) {
+        const size_t prefix_len = std::min(len, prefix_buffer_.size() - prefix_buffer_size_);
+        memcpy(prefix_buffer_.data() + prefix_buffer_size_, data, prefix_len);
+        prefix_buffer_size_ += prefix_len;
+        inspector_.consume(data, prefix_len);
+        offset = prefix_len;
+
+        if (prefix_buffer_size_ == prefix_buffer_.size()) {
+          const auto prefix_status = inspector_.validate_prefix();
+          if (prefix_status != qc::StockUploadStatus::Ok) {
+            this->fail_(qc::StockUploadInspector::status_message(prefix_status));
+            return;
+          }
+          if (!this->start_backend_()) return;
+        }
       }
+
+      if (backend_ && offset < len) {
+        inspector_.consume(data + offset, len - offset);
+        const auto error = backend_->write(data + offset, len - offset);
+        if (error != ota::OTA_RESPONSE_OK) {
+          this->fail_("ESP-IDF rejected data while writing the inactive OTA slot");
+          return;
+        }
+      }
+      this->arm_timeout_();
     }
 
     if (!final || !upload_active_) return;
+    file_part_finished_ = true;
 
     const auto status = inspector_.validate(partition_size_);
     if (status != qc::StockUploadStatus::Ok) {
@@ -113,6 +142,11 @@ class StockFileUploadHandler : public AsyncWebHandler {
 
     const std::string project = inspector_.project_name();
     const bool marker_seen = inspector_.quietcool_marker_seen();
+    const size_t image_size = inspector_.total_size();
+    if (!backend_) {
+      this->fail_("File is too short to initialize the OTA backend");
+      return;
+    }
     const auto error = backend_->end();
     backend_.reset();
     upload_active_ = false;
@@ -122,17 +156,12 @@ class StockFileUploadHandler : public AsyncWebHandler {
       return;
     }
 
-    if (!parent_->finalize_uploaded_stock()) {
-      result_message_ = "Image was written but could not be marked valid; staying on current firmware";
-      return;
-    }
-
-    upload_success_ = true;
-    result_message_ = "OEM restore accepted; image verified and device will reboot";
-    ESP_LOGW(TAG,
-             "Local OEM restore accepted: bytes=%u project='%s' quietcool_marker=%s",
-             static_cast<unsigned>(inspector_.total_size()), project.c_str(), YESNO(marker_seen));
-    parent_->schedule_uploaded_stock_reboot();
+    image_ready_ = true;
+    uploaded_size_ = image_size;
+    uploaded_project_ = project;
+    uploaded_marker_seen_ = marker_seen;
+    result_message_ = "OEM image verified; waiting for the complete upload request";
+    this->arm_timeout_();
   }
 
   void handleRequest(AsyncWebServerRequest *request) override {
@@ -162,20 +191,76 @@ and settings are preserved.</p></body></html>)html";
       return;
     }
 
+    // The multipart parser has completed the entire request. Retire the
+    // transfer timeout before confirming the new slot or sending the response.
+    ++upload_generation_;
+    bool should_reboot = false;
+    if (image_ready_ && !multiple_files_) {
+      if (parent_->finalize_uploaded_stock()) {
+        upload_success_ = true;
+        should_reboot = true;
+        result_message_ = "OEM restore accepted; image verified and device will reboot";
+        ESP_LOGW(TAG,
+                 "Local OEM restore accepted: bytes=%u project='%s' quietcool_marker=%s",
+                 static_cast<unsigned>(uploaded_size_), uploaded_project_.c_str(), YESNO(uploaded_marker_seen_));
+      } else {
+        result_message_ = "Image was written but could not be marked valid; staying on current firmware";
+      }
+    } else if (image_ready_) {
+      parent_->cancel_uploaded_stock();
+      image_ready_ = false;
+    }
+
+    if (backend_) backend_->abort();
+    backend_.reset();
+    upload_active_ = false;
+
     const int status = upload_success_ ? 200 : 409;
-    const char *message = result_message_.empty() ? "No firmware file received" : result_message_.c_str();
-    request->send(status, "text/plain", message);
+    const std::string message = result_message_.empty() ? "No firmware file received" : result_message_;
+    request->send(status, "text/plain", message.c_str());
+    if (should_reboot) parent_->schedule_uploaded_stock_reboot();
+    this->clear_request_state_();
   }
 
  protected:
   void begin_upload_(AsyncWebServerRequest *request, const std::string &filename) {
+    // A completed file part followed by another file part is still the same
+    // multipart request: reject it instead of letting a later part replace the
+    // already-verified boot selection. If the previous transfer never reached
+    // a part boundary, it was interrupted and this is a clean retry.
+    if (file_part_started_ && file_part_finished_) {
+      if (image_ready_) parent_->cancel_uploaded_stock();
+      if (backend_) backend_->abort();
+      backend_.reset();
+      image_ready_ = false;
+      upload_active_ = false;
+      upload_success_ = false;
+      multiple_files_ = true;
+      file_part_finished_ = false;
+      result_message_ = "Exactly one firmware file must be uploaded";
+      ++upload_generation_;
+      ESP_LOGW(TAG, "Rejected local OEM request containing multiple file parts");
+      return;
+    }
+
     if (backend_) backend_->abort();
+    if (image_ready_) parent_->cancel_uploaded_stock();
     backend_.reset();
     inspector_.reset();
+    prefix_buffer_.fill(0);
+    prefix_buffer_size_ = 0;
     partition_size_ = 0;
     upload_active_ = false;
     upload_success_ = false;
+    image_ready_ = false;
+    multiple_files_ = false;
+    file_part_started_ = true;
+    file_part_finished_ = false;
+    uploaded_size_ = 0;
+    uploaded_project_.clear();
+    uploaded_marker_seen_ = false;
     result_message_.clear();
+    ++upload_generation_;
 
     const std::string confirmation = request->hasParam("confirm") ? request->arg("confirm") : "";
     if (confirmation != "RESTORE_OEM_FIRMWARE") {
@@ -191,21 +276,64 @@ and settings are preserved.</p></body></html>)html";
     }
     partition_size_ = target->size;
 
+    upload_active_ = true;
+    this->arm_timeout_();
+    ESP_LOGW(TAG, "Local OEM restore upload started (preflight): filename='%s' target=%s@0x%06" PRIx32 " size=%u",
+             filename.c_str(), target->label, target->address, static_cast<unsigned>(target->size));
+  }
+
+  bool start_backend_() {
     backend_ = ota::make_ota_backend();
     if (!backend_) {
-      result_message_ = "Could not initialize the ESP-IDF OTA backend";
-      return;
+      this->fail_("Could not initialize the ESP-IDF OTA backend");
+      return false;
     }
-    const auto error = backend_->begin(0);
+    auto error = backend_->begin(0);
+    if (error == ota::OTA_RESPONSE_OK)
+      error = backend_->write(prefix_buffer_.data(), prefix_buffer_size_);
     if (error != ota::OTA_RESPONSE_OK) {
-      backend_.reset();
-      result_message_ = "Could not begin writing the inactive OTA partition";
-      return;
+      this->fail_("Could not begin writing the inactive OTA partition");
+      return false;
     }
+    ESP_LOGW(TAG, "Local OEM upload prefix accepted; writing inactive OTA slot");
+    return true;
+  }
 
-    upload_active_ = true;
-    ESP_LOGW(TAG, "Local OEM restore upload started: filename='%s' target=%s@0x%06" PRIx32 " size=%u",
-             filename.c_str(), target->label, target->address, static_cast<unsigned>(target->size));
+  void arm_timeout_() {
+    const uint32_t generation = upload_generation_;
+    parent_->schedule_stock_upload_timeout([this, generation]() {
+      if (generation != upload_generation_ || (!upload_active_ && !image_ready_ && !backend_)) return;
+      if (backend_) backend_->abort();
+      backend_.reset();
+      if (image_ready_) parent_->cancel_uploaded_stock();
+      upload_active_ = false;
+      upload_success_ = false;
+      image_ready_ = false;
+      file_part_started_ = false;
+      file_part_finished_ = false;
+      result_message_ = "Upload timed out before the request completed";
+      ++upload_generation_;
+      ESP_LOGE(TAG, "Local OEM upload timed out; OTA session aborted");
+    });
+  }
+
+  void clear_request_state_() {
+    ++upload_generation_;
+    backend_.reset();
+    inspector_.reset();
+    prefix_buffer_.fill(0);
+    prefix_buffer_size_ = 0;
+    partition_size_ = 0;
+    upload_active_ = false;
+    upload_success_ = false;
+    image_ready_ = false;
+    multiple_files_ = false;
+    file_part_started_ = false;
+    file_part_finished_ = false;
+    uploaded_size_ = 0;
+    uploaded_project_.clear();
+    uploaded_marker_seen_ = false;
+    result_message_.clear();
   }
 
   void fail_(const char *message) {
@@ -220,9 +348,19 @@ and settings are preserved.</p></body></html>)html";
   HttpFlashHandler *parent_;
   ota::OTABackendPtr backend_{nullptr};
   qc::StockUploadInspector inspector_;
+  std::array<uint8_t, qc::StockUploadInspector::PREFIX_SIZE> prefix_buffer_{};
+  size_t prefix_buffer_size_{0};
   size_t partition_size_{0};
   bool upload_active_{false};
   bool upload_success_{false};
+  bool image_ready_{false};
+  bool multiple_files_{false};
+  bool file_part_started_{false};
+  bool file_part_finished_{false};
+  size_t uploaded_size_{0};
+  std::string uploaded_project_;
+  bool uploaded_marker_seen_{false};
+  uint32_t upload_generation_{0};
   std::string result_message_;
 };
 
@@ -254,13 +392,23 @@ bool HttpFlashHandler::confirm_new_firmware_slot_() {
   }
 
   ESP_LOGE(TAG, "Could not confirm new slot (err=0x%X); restoring current boot selection", err);
-  const esp_partition_t *running = esp_ota_get_running_partition();
-  if (running != nullptr) {
-    const esp_err_t restore_err = esp_ota_set_boot_partition(running);
-    if (restore_err != ESP_OK)
-      ESP_LOGE(TAG, "Could not restore running boot partition (err=0x%X)", restore_err);
-  }
+  this->cancel_uploaded_stock();
   return false;
+}
+
+bool HttpFlashHandler::cancel_uploaded_stock() {
+  const esp_partition_t *running = esp_ota_get_running_partition();
+  if (running == nullptr) {
+    ESP_LOGE(TAG, "Could not restore running boot partition: partition unavailable");
+    return false;
+  }
+  const esp_err_t err = esp_ota_set_boot_partition(running);
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "Could not restore running boot partition (err=0x%X)", err);
+    return false;
+  }
+  ESP_LOGW(TAG, "Restored current firmware as the next boot partition");
+  return true;
 }
 
 void HttpFlashHandler::on_ota_state(ota::OTAState state, float progress, uint8_t error) {
