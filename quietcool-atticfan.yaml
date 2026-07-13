@@ -574,14 +574,15 @@ button:
   #   3. Web Installer: the Improv-BLE flow could surface this
   #      via the existing api action.
   #
-  # `entity_category: config` puts this in the Configuration panel of the HA
-  # device page (not the main dashboard) so it's discoverable but not
-  # accidentally pressable from a glance card.
+  # Keep this destructive maintenance action with the other recovery/reset
+  # controls in HA's Diagnostic panel, away from ordinary settings in the
+  # Configuration panel. Entity categories still keep it off auto-generated
+  # dashboards and whole-device/area service targets.
   - platform: template
     id: restore_stock_firmware
     name: "Restore Stock Firmware"
     icon: mdi:backup-restore
-    entity_category: config
+    entity_category: diagnostic
     on_press:
       then:
         - logger.log:
