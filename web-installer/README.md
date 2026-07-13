@@ -22,14 +22,12 @@ lifecycle:
    running, this flow no longer serves to change its firmware: the hub still speaks
    the OEM BLE protocol, but its `Upgrade` command refuses QuietCool's firmware
    domains, so it can't be rolled back to stock over BLE — use path 2 instead.
-2. **HTTP flash flow (section at the bottom).** Talks to a hub already running the
-   ESPHome firmware. It can either hand the device a firmware URL through
-   `POST /api/flash_url`, or stream a locally selected OEM application image through
-   `POST /api/restore_stock_file`. Both endpoints come from the
-   `http_flash_handler` component in
-   [`../components/http_flash_handler/`](../components/http_flash_handler/). The
-   local path is version-independent and keeps working if the vendor removes an
-   old firmware URL.
+2. **Device firmware page (section at the bottom).** For a hub already running the
+   ESPHome firmware, the public installer asks only for its hostname or IP and
+   navigates to `http://<host>/restore-stock`. The hub serves both the URL-flash and
+   local OEM-file forms itself. Their requests are therefore same-origin instead of
+   HTTPS-to-HTTP mixed content, which browsers may block. The local-file path is
+   version-independent and keeps working if the vendor removes an old firmware URL.
 
 ## Layout
 
@@ -67,11 +65,11 @@ OEM OTA mechanism — only the firmware URL changes.
   command refuses QuietCool's firmware domains (the hub still speaks OEM BLE, it just
   won't accept a stock bin over it), so restoring stock goes through the HTTP path below.
 
-To roll a hub that is **already running ESPHome** back to stock, use the **HTTP
-flash** section at the bottom of the page. Choose either the verified V4.1 URL
-preset or a locally saved OEM `.bin`. The same local-file form is built into the
-device at `http://<host>/restore-stock`, so a restore does not depend on this
-installer remaining hosted. The firmware's *Restore Stock Firmware* button in
+To roll a hub that is **already running ESPHome** back to stock, use the bottom
+card to open the hub's own page at `http://<host>/restore-stock`. Choose either
+the verified V4.1 URL preset or a locally saved OEM `.bin` there. Because the
+forms are built into the device, a restore does not depend on this installer
+remaining hosted. The firmware's *Restore Stock Firmware* button in
 Home Assistant and UART are additional paths. The OEM `Upgrade` command over BLE
 deliberately refuses OEM firmware domains, so rollback goes through HTTP, not BLE.
 
@@ -84,21 +82,27 @@ settings persist. The KEY1 5-second Factory Reset clears Wi-Fi credentials and
 ESPHome preferences for re-onboarding but also deliberately preserves OEM `hx_list`;
 use **Clear BLE Pairings** separately when the stored phone list must be removed.
 
-### Path 2: HTTP flash (any URL onto an ESPHome-running hub)
+### Path 2: device firmware page (ESPHome-running hub)
 
-The bottom card on the page (`#card-esphome-flash`) is independent of the BLE flow
-and works after the firmware is installed. Inputs:
+The bottom card (`#card-esphome-flash`) is independent of the BLE flow. Enter the
+device hostname or IP—such as `quietcool-atticfan-abcdef.local` or a LAN IP—and
+click **Open device firmware page**. The browser navigates to
+`http://<host>/restore-stock`; the hostname is remembered for the next visit.
 
-- **Device hostname or IP** — e.g. `quietcool-atticfan-abcdef.local` (mDNS, where
-  `abcdef` is the last 3 bytes of the device's Wi-Fi MAC) or a static LAN IP.
-  Auto-filled from the last successful flash in this browser.
-- **Firmware URL** — any `http://` or `https://` URL the hub's Wi-Fi can reach. The
-  hub fetches the bin itself, not your phone.
-- **MD5 (optional)** — 32 hex chars. If supplied, the device validates the
-  downloaded bin and aborts before writing on mismatch; if omitted, it fetches
-  `<firmware-url>.md5`. A **Pre-fill OEM V4.1** button drops the exact OEM CDN
-  URL + verified MD5 in one click. Both values are required for the endpoint to
-  recognize and safely finalize a stock restore.
+That device-local page offers:
+
+- **Flash firmware from a URL** — any `http://` or `https://` URL the hub's Wi-Fi
+  can reach. The hub fetches the bin itself. An optional 32-character MD5 checks
+  the download; if omitted, the hub fetches `<firmware-url>.md5`. **Use known OEM
+  V4.1** fills the exact verified stock URL and checksum.
+- **Restore OEM firmware from a local file** — streams a locally selected OEM
+  IT-AF-SMT application `.bin` directly from the browser into the inactive slot.
+
+Both actions disable the page controls as soon as the user submits. URL flashing
+shows an accepted/downloading state. Local upload shows percentage, then an
+image-verification state. On success the browser remains on the page with reboot
+guidance rather than navigating to the endpoint's plain-text response. Failures
+re-enable the controls so the user can correct the input and retry.
 
 **Partition layout requirement.** The hub's flash uses the OEM IT-AF-SMT layout:
 `nvs` @ `0x9000`, `otadata` @ `0xd000`, `phy_init` @ `0xf000`, `coredump` @
@@ -119,8 +123,7 @@ image. Examples:
 When in doubt, build your custom firmware from this project (which already wires
 `partitions: ./partitions.csv`) — that guarantees compatibility.
 
-The page POSTs `http://<host>/api/flash_url?url=…&md5=…` (an empty body, no custom
-headers — so no CORS preflight is required for the simple case). The device's
+The local page POSTs `/api/flash_url?url=…&md5=…` with an empty body. The device's
 `http_flash_handler` responds `200 OK` ("Accepted") immediately, then ~500 ms later starts
 the OTA — pulls the bin, writes to the inactive OTA slot, reboots into it. The
 running slot can never be overwritten (ESP-IDF guarantees this), so the previous
@@ -132,12 +135,10 @@ that explicit restore.
 
 #### Local OEM file restore
 
-The same bottom card accepts a local OEM IT-AF-SMT application `.bin`. The browser
-preflights its ESP32 header, app descriptor, target chip, size, project name, and
-optional `IT-BLT-ATTICFAN` confidence marker, then uploads it as multipart data to:
+The device page uploads the selected image as multipart data to:
 
 ```text
-POST http://<host>/api/restore_stock_file?confirm=RESTORE_OEM_FIRMWARE
+POST /api/restore_stock_file?confirm=RESTORE_OEM_FIRMWARE
 ```
 
 The device independently repeats the structural and size checks while streaming
@@ -157,20 +158,9 @@ Assistant adoption secures API/OTA but does not add web-server authentication. A
 ESPHome `web_server.auth` in a custom or adopted build when HTTP authentication is
 desired.
 
-For a fully self-contained flow, browse directly to `http://<host>/restore-stock`.
-The device serves a minimal multipart upload form with the same validation and
-finalization behavior.
-
-**Mixed-content gotcha:** if you're loading this page over HTTPS (e.g.
-`https://<user>.github.io/<repo>/`) and the device serves `http://`, modern
-browsers may block the cross-protocol fetch. Workarounds:
-
-1. **Use Chrome's Private Network Access** — the device sends
-   `Access-Control-Allow-Private-Network: true` in the OPTIONS preflight, so
-   Chrome 117+ allows the request. Other browsers may not.
-2. **Load this page over plain HTTP from your LAN** — drop the same files on a
-   local server, or use the device's own web UI at `http://<host>/`.
-3. **Reverse-proxy the device through HTTPS** — overkill for one-off flashes.
+The public installer deliberately navigates to the local page instead of sending
+these POSTs itself. This avoids the mixed-content/private-network restrictions that
+can block an HTTPS page from calling a plain-HTTP LAN device.
 
 ## Hosting requirements
 

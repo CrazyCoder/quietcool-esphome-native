@@ -1177,7 +1177,7 @@ web_server:
 # ====================================================================
 # Firmware web endpoints for a hub already running this build:
 #   POST /api/flash_url              download a URL through http_request
-#   GET  /restore-stock              self-contained local OEM upload page
+#   GET  /restore-stock              same-origin URL flash + OEM upload page
 #   POST /api/restore_stock_file     streamed, version-neutral OEM restore
 # The local path validates the ESP32 OTA application envelope and target-slot
 # fit before ESP-IDF performs full image verification. Only that explicit OEM

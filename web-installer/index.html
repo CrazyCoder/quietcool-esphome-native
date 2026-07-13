@@ -110,7 +110,7 @@
   .progress { height: 4px; background: var(--border); border-radius: 2px; overflow: hidden; margin: 8px 0; }
   .progress > div { height: 100%; background: var(--accent); width: 0%; transition: width .3s ease; }
   /* Live-updating counters/percentages: fixed-width digits, no layout shift. */
-  #progress-status, #connect-status, #esphome-flash-status, #stock-file-status, .log {
+  #progress-status, #connect-status, .log {
     font-variant-numeric: tabular-nums; }
   /* Cards revealed mid-flow (display:none at load) fade in on first render;
      nothing animates on page load because these start hidden. */
@@ -126,7 +126,7 @@
 <body>
 <main>
   <h1>QuietCool ESPHome installer</h1>
-  <p class="muted">Two paths: (1) replace OEM firmware with custom ESPHome via Web BLE (sections 1–6 below), or (2) push any firmware URL onto a hub already running the ESPHome firmware over HTTP (section at the bottom).</p>
+  <p class="muted">Two paths: (1) replace OEM firmware with custom ESPHome via Web BLE (sections 1–6 below), or (2) open the local firmware page on a hub already running the ESPHome firmware (section at the bottom).</p>
 
   <div class="card" id="card-compat">
     <h2>1. Browser check</h2>
@@ -136,7 +136,7 @@
 
   <div class="card" id="card-target">
     <h2>2. What do you want to install?</h2>
-    <p class="muted">Both options use the same OEM OTA mechanism — you'll still pick auth, Wi-Fi, etc. below. <strong>Both assume the hub is still running OEM firmware.</strong> If it's <em>already</em> running the ESPHome firmware, use the <a href="#card-esphome-flash" style="color:var(--accent)">HTTP flash section at the bottom</a> instead: that firmware still speaks OEM BLE (the stock app keeps working), but its <code>Upgrade</code> command refuses QuietCool's own firmware domains, so this Web-BLE flow can't roll it back to stock.</p>
+    <p class="muted">Both options use the same OEM OTA mechanism — you'll still pick auth, Wi-Fi, etc. below. <strong>Both assume the hub is still running OEM firmware.</strong> If it's <em>already</em> running the ESPHome firmware, use the <a href="#card-esphome-flash" style="color:var(--accent)">device firmware page section at the bottom</a> instead: that firmware still speaks OEM BLE (the stock app keeps working), but its <code>Upgrade</code> command refuses QuietCool's own firmware domains, so this Web-BLE flow can't roll it back to stock.</p>
 
     <div class="mode-block selected" id="target-esphome-block">
       <label class="head"><input type="radio" name="target" value="esphome" checked> <strong>Install ESPHome (custom firmware)</strong></label>
@@ -256,56 +256,24 @@
 
   <div class="card" id="card-esphome-flash">
     <h2>Already running the ESPHome firmware?</h2>
-    <p class="muted">If your hub is <strong>already running the ESPHome firmware</strong>, use this section to flash any compatible firmware URL onto it: the verified OEM stock <code>V4.1</code> to roll back, a custom build hosted somewhere, or an alternative ESPHome image. It uses the device's built-in <code>POST /api/flash_url</code> endpoint over plain HTTP, no Bluetooth required. The OEM preset supplies the exact verified URL+MD5 pair that tells the device to confirm the foreign stock slot and preserve OEM NVS state during final cleanup.</p>
-    <p class="muted">The ESPHome firmware still speaks OEM BLE (the stock QuietCool Smart Control app keeps pairing and controlling it), but its <code>Upgrade</code> command deliberately <strong>blocks QuietCool's firmware domains</strong> — so the Web-BLE flow above can't push the stock bin back over Bluetooth. This HTTP path reaches the device directly and isn't subject to that.</p>
+    <p class="muted">Open the firmware page served by the hub itself. It can flash a compatible firmware URL or upload a locally saved OEM application <code>.bin</code>. Running the forms on the hub avoids browsers blocking an HTTPS installer from posting to a plain-HTTP LAN device.</p>
+    <p class="muted">The local-file path is version-independent, so it keeps working even if QuietCool removes an old firmware download URL. The page also has a one-click preset for the known OEM <code>V4.1</code> image.</p>
 
     <label for="esphome-host">Device hostname or IP</label>
     <input id="esphome-host" type="text" placeholder="quietcool-atticfan-XXXXXX.local" autocomplete="off" autocapitalize="off" spellcheck="false">
-    <p class="muted">The mDNS name the device announces, OR its LAN IP. Auto-filled from the last successful flash on this browser.</p>
+    <p class="muted">Enter the mDNS name the device announces, or its LAN IP. A port is optional. Do not add a path.</p>
 
-    <label for="esphome-url">Firmware URL (.bin)</label>
-    <input id="esphome-url" type="url" placeholder="https://..." autocomplete="off" autocapitalize="off" spellcheck="false">
-    <p class="muted">Must start with <code>http://</code> or <code>https://</code>. The hub fetches this URL over its own Wi-Fi — not through the device running this page.</p>
-    <div class="callout"><strong>Partition layout matters</strong> — only firmwares built for the OEM IT-AF-SMT layout will flash here (OTA slots at <code>0x20000</code> and <code>0x200000</code>, 1.875 MB each). Safe to flash: the verified OEM V4.1 preset, this project's own builds (preserve the OEM layout via <code>partitions.csv</code>), and forks that ship the same <code>partitions.csv</code>. Stock ESPHome builds with the default 4 MB partition layout have different OTA addresses and slot sizes; they may refuse to write or fail to boot. Ordinary custom images keep app rollback, but the exact verified OEM restore is marked valid deliberately so it stays stock.</div>
-
-    <label for="esphome-md5">MD5 (optional, 32 hex chars)</label>
-    <input id="esphome-md5" type="text" placeholder="optional; empty fetches &lt;url&gt;.md5" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="32">
-    <p class="muted">If supplied, the OTA aborts before writing if the downloaded bin's MD5 doesn't match — a cheap safety net against the wrong file landing in flash.</p>
-
-    <div class="row" style="margin-top:12px">
-      <button id="btn-esphome-flash">Flash</button>
-      <button id="btn-fill-oem-v41" class="secondary">Pre-fill OEM V4.1</button>
-    </div>
-    <p id="esphome-flash-status" class="muted" style="margin-top:10px"></p>
-
-    <hr>
-    <h3>Restore OEM firmware from a local file</h3>
-    <p class="muted">Use an OEM IT-AF-SMT application <code>.bin</code> saved on this phone or computer. The browser uploads it directly to the hub over your LAN, so this path keeps working if QuietCool removes an old download URL. It is not limited to V4.1.</p>
-
-    <label for="stock-file">OEM application firmware (.bin)</label>
-    <input id="stock-file" type="file" accept=".bin,application/octet-stream">
-    <p id="stock-file-info" class="muted">Choose an OTA application image—not a full 4 MB flash dump, bootloader, or ESPHome build.</p>
-
-    <label style="display:flex;align-items:flex-start;gap:7px;margin-top:12px">
-      <input id="stock-file-confirm" type="checkbox">
-      <span>I confirm this file is OEM firmware for the QuietCool IT-AF-SMT. This restore is deliberately marked valid and will not automatically roll back.</span>
-    </label>
-
-    <button id="btn-stock-file" class="danger" style="margin-top:12px">Upload local file &amp; restore OEM</button>
-    <div class="progress" id="stock-file-progress" style="display:none"><div id="stock-file-progress-bar"></div></div>
-    <p id="stock-file-status" class="muted" style="margin-top:10px"></p>
+    <button id="btn-open-device-firmware" style="margin-top:12px">Open device firmware page</button>
 
     <details>
       <summary>How does this work? / troubleshooting</summary>
-      <p class="muted">The button issues a single <code>POST http://&lt;host&gt;/api/flash_url?url=…&amp;md5=…</code> to the device. The device's <code>http_flash_handler</code> component validates the URL+MD5, returns <code>200 OK</code> (body “Accepted…”) immediately, then ~500 ms later kicks off the <code>ota.http_request</code> OTA — pulls the bin, writes it to the inactive OTA slot, and reboots. Ordinary custom images retain normal app-rollback protection. The exact OEM V4.1 URL+MD5 preset instead marks stock VALID before reboot so it stays installed, erases only ESPHome's private NVS namespace, and preserves OEM pairings and settings.</p>
+      <p class="muted">The button navigates directly to <code>http://&lt;host&gt;/restore-stock</code>. That page uses same-origin requests to the device's <code>/api/flash_url</code> and <code>/api/restore_stock_file</code> endpoints, shows upload progress, and disables its controls while a flash is active.</p>
       <p class="muted"><strong>No auth on this endpoint by default</strong> — this is an intentional LAN-trust tradeoff. Home Assistant adoption secures ESPHome API/OTA but does not add web-server authentication. To protect these HTTP endpoints, add <code>auth: { username, password }</code> under <code>web_server:</code> in your build or adopted wrapper.</p>
-      <p class="muted">The local-file button streams a multipart upload to <code>POST /api/restore_stock_file</code>. The hub checks the ESP32 application header and descriptor before erasing the inactive slot, enforces the 1.875 MB slot size, rejects this project's own replacement firmware, then lets ESP-IDF verify the complete image checksum and embedded SHA-256. A QuietCool <code>IT-BLT-ATTICFAN</code> marker is reported as a confidence signal but is not a version whitelist. The slot is made permanent only after the complete multipart request succeeds; stalled uploads are aborted automatically.</p>
       <p class="muted"><strong>Common failure modes:</strong></p>
       <ul class="step-list muted">
-        <li>"Network error" → device hostname doesn't resolve; try the LAN IP instead. The full mDNS name is required, including the MAC suffix (e.g. <code>quietcool-atticfan-abcdef.local</code>, not just <code>quietcool-atticfan</code>).</li>
+        <li>Page doesn't open → device hostname doesn't resolve; try the LAN IP instead. The full mDNS name is required, including the MAC suffix (e.g. <code>quietcool-atticfan-abcdef.local</code>, not just <code>quietcool-atticfan</code>).</li>
         <li>"404 Not Found" → device firmware doesn't have <code>web_server</code> + <code>http_flash_handler</code> wired. Re-flash with a current build that includes them.</li>
-        <li><strong>500</strong> with a validation message (e.g. "Missing or empty 'url' parameter", "MD5 must be exactly 32 hex characters") → the device rejected the request; the reason is in the response body. ESPHome's IDF web backend surfaces the handler's validation errors as 500. The form pre-checks the URL and MD5, so you'll normally see the reason inline before anything is sent.</li>
-        <li>POST succeeds but device doesn't come back → check the device's UART/logger output. Ordinary custom images retain ESP-IDF rollback and should boot the previous firmware after a power-cycle. The verified OEM restore is deliberately marked valid so it stays stock; use UART recovery if that known image unexpectedly fails to boot.</li>
+        <li>Update is rejected → the device page shows the endpoint's validation reason. Correct it there and retry.</li>
       </ul>
     </details>
   </div>
@@ -324,6 +292,6 @@
     Source &amp; design: <a style="color:var(--accent)" href="https://github.com/CrazyCoder/quietcool-esphome-native">quietcool-esphome-native</a> · OEM device QuietCool IT-AF-SMT
   </p>
 </main>
-<script src="./app.js?v=4"></script>
+<script src="./app.js?v=5"></script>
 </body>
 </html>

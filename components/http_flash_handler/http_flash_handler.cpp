@@ -168,25 +168,160 @@ class StockFileUploadHandler : public AsyncWebHandler {
     if (request->method() == HTTP_GET) {
       static const char PAGE[] = R"html(<!doctype html>
 <html><head><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>QuietCool OEM restore</title><style>
-body{font:16px system-ui;max-width:680px;margin:30px auto;padding:0 16px;line-height:1.45}
-input,button{font:inherit;margin:8px 0;padding:10px;max-width:100%}button{display:block}
-.warning{border-left:4px solid #c60;padding:10px;background:#fff4df}
-</style></head><body><h1>Restore QuietCool OEM firmware</h1>
-<p>Upload an OEM IT-AF-SMT <strong>application .bin</strong> saved on this device.
-This local path does not depend on QuietCool keeping any download URL online.</p>
+<title>QuietCool firmware update</title><style>
+:root{color-scheme:light dark}body{font:16px system-ui;max-width:720px;margin:30px auto;padding:0 16px;line-height:1.45}
+section{border:1px solid #8886;border-radius:10px;padding:18px;margin:20px 0}h2{margin-top:0}
+input,button{box-sizing:border-box;font:inherit;margin:6px 0;padding:10px;max-width:100%}
+input[type=url],input[type=text],input[type=file]{display:block;width:100%}button{cursor:pointer}
+button:disabled,input:disabled{cursor:not-allowed;opacity:.55}.row{display:flex;gap:10px;flex-wrap:wrap}
+.warning{border-left:4px solid #c60;padding:10px;background:#f90c}.status{min-height:1.5em}
+.working{color:#b56a00}.ok{color:#16843a}.error{color:#c32b2b}.progress{height:10px;background:#8884;border-radius:9px;overflow:hidden;display:none}
+.progress div{height:100%;width:0;background:#16843a;transition:width .15s}small{opacity:.8}
+</style></head><body><h1>QuietCool firmware update</h1>
+<p>This page runs directly on the hub. Keep this page open and keep the hub powered
+while an update is in progress.</p>
+
+<section><h2>Flash firmware from a URL</h2>
+<p>The hub downloads the application image over its own Wi-Fi. Use this for replacement
+firmware, another compatible custom build, or the known OEM V4.1 restore.</p>
+<form id="url-form">
+<label>Firmware URL (.bin)<input id="firmware-url" type="url" required placeholder="https://..."></label>
+<label>MD5 (optional)<input id="firmware-md5" type="text" maxlength="32" pattern="[0-9A-Fa-f]{32}"
+ placeholder="32 hex characters; empty fetches <url>.md5"></label>
+<div class="row"><button id="url-submit" type="submit">Download and flash URL</button>
+<button id="fill-oem" type="button">Use known OEM V4.1</button></div></form>
+<p id="url-status" class="status" aria-live="polite"></p>
+<small>Compatible images must use this hub's OEM OTA partition layout. Ordinary custom
+images retain rollback protection. The exact OEM V4.1 preset is made permanent.</small>
+</section>
+
+<section><h2>Restore OEM firmware from a local file</h2>
+<p>Upload an OEM IT-AF-SMT <strong>application .bin</strong> saved on this phone or
+computer. This path keeps working if a vendor download URL disappears.</p>
 <div class="warning"><strong>Permanent foreign-firmware restore:</strong> the uploaded
 slot is marked valid and will not automatically roll back. Use only OEM firmware for
 the QuietCool IT-AF-SMT—not a full-flash dump, bootloader, or ESPHome image.</div>
-<form method="post" enctype="multipart/form-data"
+<form id="file-form" method="post" enctype="multipart/form-data"
  action="/api/restore_stock_file?confirm=RESTORE_OEM_FIRMWARE">
-<p><input type="file" name="firmware" accept=".bin,application/octet-stream" required></p>
-<label><input type="checkbox" required> I confirm this is OEM firmware for the
-QuietCool IT-AF-SMT.</label>
-<button type="submit">Upload and restore OEM firmware</button></form>
-<p>The hub validates the ESP32 application structure, target chip, OTA-slot size,
-and complete ESP-IDF image integrity before changing the boot partition. OEM pairings
-and settings are preserved.</p></body></html>)html";
+<p><input id="firmware-file" type="file" name="firmware" accept=".bin,application/octet-stream" required></p>
+<label><input id="file-confirm" type="checkbox" required> I confirm this is OEM firmware
+for the QuietCool IT-AF-SMT.</label>
+<p><button id="file-submit" type="submit">Upload and restore OEM firmware</button></p></form>
+<div id="file-progress" class="progress"><div id="file-progress-bar"></div></div>
+<p id="file-status" class="status" aria-live="polite"></p>
+<small>The hub validates the ESP32 application structure, target chip, OTA-slot size,
+and complete image integrity before changing the boot partition. OEM pairings and
+settings are preserved.</small>
+</section>
+
+<script>
+const OEM_URL="http://myquietcool.com/profile/upload/2025/11/18/IT-BLT-ATTICFAN_V4.1_20251118010357A008.bin";
+const OEM_MD5="36d2e90dcfdd553272fc4eebdc3c4444";
+const controls=[...document.querySelectorAll("form input,form button")];
+const urlForm=document.getElementById("url-form");
+const fileForm=document.getElementById("file-form");
+const urlButton=document.getElementById("url-submit");
+const fileButton=document.getElementById("file-submit");
+const fileProgress=document.getElementById("file-progress");
+const fileProgressBar=document.getElementById("file-progress-bar");
+let busy=false;
+
+window.addEventListener("beforeunload",event=>{
+  if(!busy) return;
+  event.preventDefault();
+  event.returnValue="";
+});
+
+function setBusy(value,activeButton,text){
+  busy=value;
+  controls.forEach(control=>control.disabled=value);
+  if(activeButton&&text) activeButton.textContent=text;
+}
+function showStatus(id,message,kind){
+  const element=document.getElementById(id);
+  element.textContent=message;
+  element.className="status "+(kind||"");
+}
+function restoreButtons(){
+  setBusy(false);
+  urlButton.textContent="Download and flash URL";
+  fileButton.textContent="Upload and restore OEM firmware";
+}
+
+document.getElementById("fill-oem").addEventListener("click",()=>{
+  document.getElementById("firmware-url").value=OEM_URL;
+  document.getElementById("firmware-md5").value=OEM_MD5;
+  showStatus("url-status","Known OEM V4.1 URL and checksum filled in. Review them, then start the update.","");
+});
+
+urlForm.addEventListener("submit",async event=>{
+  event.preventDefault();
+  if(busy) return;
+  const url=document.getElementById("firmware-url").value.trim();
+  const md5=document.getElementById("firmware-md5").value.trim();
+  setBusy(true,urlButton,"Starting update...");
+  showStatus("url-status","Sending the update request. Do not reload this page or power off the hub.","working");
+  try{
+    const query=new URLSearchParams({url});
+    if(md5) query.set("md5",md5);
+    const response=await fetch("/api/flash_url?"+query,{method:"POST",body:""});
+    const message=(await response.text()).trim();
+    if(!response.ok) throw new Error(message||"The hub rejected the update request (HTTP "+response.status+").");
+    urlButton.textContent="Update accepted";
+    showStatus("url-status",(message||"Update accepted.")+" The hub is downloading and flashing now. Keep it powered and wait for it to reboot; this page may disconnect.","ok");
+  }catch(error){
+    showStatus("url-status","Update failed: "+error.message,"error");
+    restoreButtons();
+  }
+});
+
+fileForm.addEventListener("submit",event=>{
+  event.preventDefault();
+  if(busy) return;
+  const file=document.getElementById("firmware-file").files[0];
+  const body=new FormData();
+  body.append("firmware",file,file.name);
+  setBusy(true,fileButton,"Uploading...");
+  fileProgress.style.display="block";
+  fileProgressBar.style.width="0%";
+  showStatus("file-status","Uploading firmware. Do not reload this page or power off the hub.","working");
+
+  const xhr=new XMLHttpRequest();
+  xhr.open("POST","/api/restore_stock_file?confirm=RESTORE_OEM_FIRMWARE");
+  xhr.timeout=180000;
+  xhr.upload.addEventListener("progress",upload=>{
+    if(!upload.lengthComputable) return;
+    const percent=Math.min(100,Math.round(upload.loaded*100/upload.total));
+    fileProgressBar.style.width=percent+"%";
+    fileButton.textContent="Uploading... "+percent+"%";
+    showStatus("file-status","Uploading firmware: "+percent+"%. Do not reload or power off the hub.","working");
+  });
+  xhr.upload.addEventListener("load",()=>{
+    fileButton.textContent="Verifying image...";
+    showStatus("file-status","Upload complete. The hub is verifying the image; please keep waiting.","working");
+  });
+  xhr.addEventListener("load",()=>{
+    const message=(xhr.responseText||"").trim();
+    if(xhr.status>=200&&xhr.status<300){
+      fileProgressBar.style.width="100%";
+      fileButton.textContent="Restore accepted";
+      showStatus("file-status",(message||"OEM restore accepted.")+" Keep the hub powered while it reboots into OEM firmware; this page will disconnect.","ok");
+    }else{
+      showStatus("file-status","Restore failed: "+(message||"the hub returned HTTP "+xhr.status)+" You may correct the problem and retry.","error");
+      restoreButtons();
+    }
+  });
+  xhr.addEventListener("error",()=>{
+    showStatus("file-status","Restore failed: network error while uploading. Check that the hub is still online, then retry.","error");
+    restoreButtons();
+  });
+  xhr.addEventListener("timeout",()=>{
+    showStatus("file-status","Restore failed: the upload timed out. Check the hub and retry.","error");
+    restoreButtons();
+  });
+  xhr.send(body);
+});
+</script></body></html>)html";
       request->send(200, "text/html", PAGE);
       return;
     }
@@ -488,7 +623,7 @@ void HttpFlashHandler::on_powerdown() {
 void HttpFlashHandler::dump_config() {
   ESP_LOGCONFIG(TAG, "QuietCool HTTP flash handler:");
   ESP_LOGCONFIG(TAG, "  Endpoint: POST /api/flash_url?url=<url>&md5=<32hex>");
-  ESP_LOGCONFIG(TAG, "  Restore page: GET /restore-stock");
+  ESP_LOGCONFIG(TAG, "  Firmware page: GET /restore-stock");
   ESP_LOGCONFIG(TAG, "  Endpoint: POST /api/restore_stock_file?confirm=RESTORE_OEM_FIRMWARE");
   ESP_LOGCONFIG(TAG, "  web_server_base:  %s",
                 web_server_base::global_web_server_base ? "OK" : "MISSING");
