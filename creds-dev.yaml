@@ -3,7 +3,7 @@
 # the main YAML's `api:` and `ota:` blocks (recursive merge keeps the
 # actions list intact).
 #
-# Selected by default (substitutions.build_mode: dev).
+# Selected by quietcool-atticfan.dev.yaml (substitutions.build_mode: dev).
 
 api:
   encryption:

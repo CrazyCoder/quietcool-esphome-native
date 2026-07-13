@@ -180,6 +180,9 @@ button:disabled,input:disabled{cursor:not-allowed;opacity:.55}.row{display:flex;
 </style></head><body><h1>QuietCool firmware update</h1>
 <p>This page runs directly on the hub. Keep this page open and keep the hub powered
 while an update is in progress.</p>
+<p><strong>Installing a normal project release?</strong> Shared factory builds offer it
+on the <a href="/">main device page</a> under <strong>Firmware</strong>. Hubs adopted
+through ESPHome Device Builder should be compiled and updated there instead.</p>
 
 <section><h2>Flash firmware from a URL</h2>
 <p>The hub downloads the application image over its own Wi-Fi. Use this for replacement

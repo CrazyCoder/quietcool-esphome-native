@@ -1,6 +1,5 @@
 # Distribution-build Wi-Fi config — no creds compiled in.
-# Selected at build time:
-#   esphome -s build_mode dist compile quietcool-atticfan.yaml
+# Used by the public adoption config and the factory release wrapper.
 #
 # First-boot connection flow with this config:
 #   1. oem_nvs_reader (priority 800) reads the ESP-IDF "nvs.net80211" namespace and,

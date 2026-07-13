@@ -17,5 +17,9 @@ components/oem_nvs_reader/test/nvs-fixture.bin
 # commit it; hosting for the Web installer should use a `dist` build instead.
 firmware.ota.bin
 
+# Generated beside the public distribution image by the release workflow.
+# Its MD5 must describe that exact build, so do not keep a source-tree copy.
+/web-installer/manifest.json
+
 # Claude Code local session / scratch directory
 .claude/

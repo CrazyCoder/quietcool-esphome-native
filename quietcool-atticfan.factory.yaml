@@ -1,0 +1,19 @@
+# Shared credential-free release firmware. Unlike an adopted build, this image
+# is identical for every hub, so it can safely self-update from the project's
+# GitHub Pages manifest. dashboard_import in the base config points Device
+# Builder at quietcool-atticfan.yaml, which intentionally omits this updater.
+
+substitutions:
+  build_mode: dist
+
+packages:
+  quietcool_atticfan: !include quietcool-atticfan.yaml
+
+update:
+  - platform: http_request
+    id: firmware_update
+    name: Firmware
+    entity_category: config
+    source: https://crazycoder.github.io/quietcool-esphome-native/manifest.json
+    update_interval: 6h
+    ota_id: http_ota

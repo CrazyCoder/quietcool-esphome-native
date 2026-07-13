@@ -1,0 +1,9 @@
+# Local development wrapper. This is the normal build/OTA target for project
+# contributors: it layers gitignored secrets.yaml credentials over the same
+# public configuration users receive through ESPHome Device Builder.
+
+substitutions:
+  build_mode: dev
+
+packages:
+  quietcool_atticfan: !include quietcool-atticfan.yaml

@@ -14,7 +14,7 @@ rem e.g.  flash.bat 192.168.1.42
 setlocal
 pushd "%~dp0"
 
-set "YAML=quietcool-atticfan.yaml"
+set "YAML=quietcool-atticfan.dev.yaml"
 rem The shipped config sets `name_add_mac_suffix: true`, so ESPHome's mDNS
 rem hostname is quietcool-atticfan-<mac6>.local, where <mac6> is the last 3 bytes
 rem of the ESP32 *WiFi/STA* MAC (e.g. STA MAC 84:1f:e8:AB:CD:EF -> abcdef).

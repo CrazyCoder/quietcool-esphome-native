@@ -24,34 +24,33 @@ esphome:
           const esp_partition_t *next = esp_ota_get_next_update_partition(NULL);
           snprintf(buf, sizeof(buf), "%s @ 0x%lx", next->label, (unsigned long)next->address);
           id(ota_target_partition).publish_state(buf);
-  # `project:` lets the ESPHome dashboard recognize this device's lineage.
-  # On dist builds (with no compiled-in api_encryption_key / ota_password),
-  # the matching `dashboard_import:` below tells HA where to fetch a
-  # user-customizable wrapper YAML when the user clicks "Adopt this device".
-  # Adoption generates per-device secrets and OTA-pushes them — the shared
-  # bin only handles Wi-Fi onboarding, not key management.
+  # `project:` lets ESPHome and Home Assistant recognize this device's
+  # lineage. The version is also the installed version compared with the
+  # factory build's managed-update manifest; keep its single source of truth
+  # in firmware-version.yaml.
   project:
     name: CrazyCoder.quietcool-atticfan
-    version: "1.0.0"
+    version: !include firmware-version.yaml
 
-# Build-mode selector. `dev` (default) pulls Wi-Fi creds + api_encryption_key
-# + ota password from secrets.yaml. Override at the command line for a
-# credential-free distribution build:
-#   esphome -s build_mode dist compile quietcool-atticfan.yaml
-# See {wifi,creds}-dev.yaml and {wifi,creds}-dist.yaml — !included via
-# `packages` below. The dist build relies on the ESPHome dashboard's
-# adoption flow to push per-user secrets after first boot.
+# This file is the public, credential-free configuration imported when a user
+# takes control in ESPHome Device Builder. The generated per-device wrapper
+# supplies Wi-Fi credentials and (optionally) an API encryption key. Local
+# development uses quietcool-atticfan.dev.yaml, which overrides this selector
+# and pulls the real credentials from secrets.yaml. GitHub releases use the
+# separate quietcool-atticfan.factory.yaml wrapper, which adds managed updates.
 substitutions:
-  build_mode: dev
+  build_mode: dist
 
 packages:
   wifi_creds: !include wifi-${build_mode}.yaml
   api_ota_creds: !include creds-${build_mode}.yaml
 
-# Where the ESPHome dashboard fetches a user-customizable wrapper YAML when
-# a freshly-flashed dist device gets adopted. The dashboard generates a
-# random api.encryption.key + ota password and writes a per-user YAML that
-# wraps this canonical config.
+# Where ESPHome Device Builder fetches this user-customizable configuration
+# when a freshly flashed factory device is adopted. Device Builder creates a
+# minimal per-device YAML which keeps this file as a remote package and adds
+# the user's device name, Wi-Fi credentials, and optional API encryption key.
+# Managed vendor updates deliberately live only in the factory wrapper, so an
+# adopted build can never replace its personalized API key with a generic bin.
 dashboard_import:
   package_import_url: github://CrazyCoder/quietcool-esphome-native/quietcool-atticfan.yaml@main
 
@@ -150,9 +149,9 @@ api:
       then:
         - lambda: 'id(oem_ble).rename_preset(old_name, new_name);'
 
-# The `ota:` list is provided entirely by creds-${build_mode}.yaml: dev has
-# a password-bearing entry (from secrets.yaml); dist has a password-less
-# entry that the dashboard replaces during adoption.
+# The `ota:` list is provided entirely by creds-${build_mode}.yaml: the dev
+# wrapper has a password-bearing entry from secrets.yaml; public factory and
+# adopted configurations use the intentional password-less LAN default.
 
 # --- Read OEM-stored Wi-Fi creds from the ESP-IDF "nvs" namespace
 # at boot (priority 800, before WIFI=250). On a hub that was previously paired
@@ -1158,7 +1157,9 @@ led_state_machine:
 # ====================================================================
 http_request:
   timeout: 30s
-  verify_ssl: false  # OEM endpoint serves over http://, no TLS cert in flash
+  # Validate public HTTPS hosts such as GitHub Pages. This has no effect on the
+  # OEM restore endpoint's plain-http URL, which remains supported.
+  verify_ssl: true
 
 # ====================================================================
 # Built-in web UI for users who don't run Home Assistant. v3 is the

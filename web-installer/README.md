@@ -38,15 +38,20 @@ manifest.json     # version metadata
 README.md         # this file
 ```
 
+`manifest.json` is generated from `firmware-version.yaml` and the exact staged
+binary by `scripts/generate_update_manifest.py`. Besides deployment metadata, it
+is the ESPHome managed-update manifest used by factory-build hubs.
+
 When deployed, drop `firmware.ota.bin` (built by `esphome compile` from the
 firmware in this repo) into the same directory as `index.html`. The page defaults
 its OTA URL to `./firmware.ota.bin` relative to wherever it's served.
 
-> **Host the credential-free build.** Build the firmware with
-> `esphome -s build_mode dist compile quietcool-atticfan.yaml` before hosting it.
-> The default `dev` build bakes Wi-Fi credentials and the API encryption key into
-> the image; the `dist` build has neither and onboards Wi-Fi via Improv-BLE, so the
-> hosted `.bin` carries no secrets. See [Caveats](#caveats--risks) below.
+> **Host the credential-free build.** Build
+> `quietcool-atticfan.factory.yaml` before hosting it. The separate
+> `quietcool-atticfan.dev.yaml` build bakes Wi-Fi credentials and the API
+> encryption key into the image; the factory build has neither, onboards Wi-Fi
+> through OEM-NVS import or Improv-BLE, and includes managed release updates.
+> See [Caveats](#caveats--risks) below.
 
 ## Install targets
 
@@ -55,7 +60,9 @@ OEM OTA mechanism — only the firmware URL changes.
 
 - **Install ESPHome (custom firmware)** — defaults to `./firmware.ota.bin`
   relative to the page. Requires the custom firmware to be present in the same
-  directory as `index.html`.
+  directory as `index.html`. After installation, shared factory builds check the
+  sibling `manifest.json` for new releases and expose them in Home Assistant and
+  on the hub's root web page.
 - **Restore OEM factory firmware** — defaults to the OEM `IT-BLT-ATTICFAN_V4.1`
   bin on QuietCool's CDN (`http://myquietcool.com/.../IT-BLT-ATTICFAN_V4.1_*.bin`),
   which is byte-for-byte what the QuietCool Smart Control app would flash. Useful
@@ -194,8 +201,9 @@ can block an HTTPS page from calling a plain-HTTP LAN device.
 source *GitHub Actions*, and the
 [`deploy-pages.yml`](../.github/workflows/deploy-pages.yml) workflow builds the
 credential-free (`dist`) firmware, stages `firmware.ota.bin` + an `.md5` next to
-`index.html`, and deploys this folder. GitHub Pages' certificate is trusted by
-ESP-IDF's CA bundle, so the hub's own HTTPS download of the firmware bin works too.
+`index.html`, generates a version/MD5-matched `manifest.json`, and deploys this
+folder. GitHub Pages' certificate is trusted by ESP-IDF's CA bundle, so the hub's
+own HTTPS update checks and firmware downloads are certificate-validated.
 
 **Redeploy after changing the firmware or the page.** Every push to `main`
 automatically runs the workflow. To rebuild and republish manually:
@@ -209,21 +217,28 @@ or use the **Actions → Deploy Web installer → Run workflow** button.
 After a successful Pages deployment, the workflow compares the credential-free build
 with the latest firmware release. If the firmware inputs changed and the image differs,
 it publishes a release and tag named
-`qc-esphome-<esphome-version>-<short-commit-hash>` with the matching `.bin`, `.md5`,
+`qc-esphome-<firmware-version>` with the matching `.bin`, `.md5`,
 `.sha256`, and build-fingerprint assets. GitHub-generated release notes compare the new
 commit with the previous firmware-release tag. Page-only changes, cache evictions, and
 other rebuilds from the same firmware inputs do not create a release. The live installer
 continues to use its short `./firmware.ota.bin` URL rather than a long GitHub Release
 asset URL.
 
+`firmware-version.yaml` is the single installed/manifest/release version. The workflow
+rejects changed firmware bytes when the live manifest already uses that version, forcing
+an intentional version bump before another public firmware release.
+
 **Self-hosting elsewhere.** The installer is a static site — serve the `web-installer/`
 folder from any host with a public-CA HTTPS cert (Cloudflare Pages, Netlify, your own
 server). Build and stage the firmware next to `index.html` yourself:
 
 ```sh
-esphome -s build_mode dist compile quietcool-atticfan.yaml
+esphome compile quietcool-atticfan.factory.yaml
 cp .esphome/build/quietcool-atticfan/.pioenvs/quietcool-atticfan/firmware.ota.bin \
    web-installer/firmware.ota.bin
+md5sum web-installer/firmware.ota.bin | awk '{print $1}' \
+   > web-installer/firmware.ota.bin.md5
+python scripts/generate_update_manifest.py
 ```
 
 The page auto-detects its firmware URL as `./firmware.ota.bin` relative to wherever
@@ -236,10 +251,10 @@ are not.
 
 1. **The OEM firmware does not verify signatures on OTA images.** Anything
    reachable at the URL gets flashed. Trust only firmware you built or verified.
-2. **The `dev`-build `firmware.ota.bin` bakes Wi-Fi creds and the API encryption
-   key into the image** (its YAML uses `!secret wifi_password` etc.). Anyone who
-   downloads such a `.bin` gets those credentials. **Always host the `dist` build**
-   (`build_mode dist`), which carries no secrets and onboards Wi-Fi via Improv-BLE.
+2. **The developer `firmware.ota.bin` bakes Wi-Fi credentials and the API
+   encryption key into the image.** Anyone who downloads such a `.bin` gets those
+   credentials. Always host the `quietcool-atticfan.factory.yaml` build, which
+   carries no secrets and onboards Wi-Fi through OEM-NVS import or Improv-BLE.
 3. **Wi-Fi password leaks in cleartext over BLE during SetRouter.** This is an OEM
    trait, not this project's. Acceptable for a one-shot bootstrap (BLE range
    ~10 m), not for repeated use.

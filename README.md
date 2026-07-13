@@ -16,7 +16,7 @@ It does everything the stock firmware does — including fan speeds, the countdo
 
 Installing from a phone? **Scan the QR code** instead of typing the URL.
 
-> **A distribute-anywhere firmware bundle.** The credential-free `dist` build (`esphome -s build_mode dist compile quietcool-atticfan.yaml`) ships with no Wi-Fi creds, no API encryption key, and no OTA password baked in: at boot, `oem_nvs_reader` imports Wi-Fi creds from the OEM-stored NVS partition (so anyone whose hub was previously connected via the QuietCool app joins their network within ~5 s), then the ESPHome dashboard's **Adopt** flow generates per-device api/ota secrets and OTA-pushes them.
+> **A distribute-anywhere firmware bundle.** The credential-free factory build (`esphome compile quietcool-atticfan.factory.yaml`) ships with no Wi-Fi credentials, API encryption key, or OTA password baked in. At boot, `oem_nvs_reader` imports Wi-Fi credentials from the OEM-stored NVS partition, so a hub previously connected through the QuietCool app normally joins its network within about five seconds. The shared build then offers managed project updates from GitHub Pages in Home Assistant and on its local web page.
 
 ---
 
@@ -165,6 +165,7 @@ On first boot after flashing over OEM firmware, existing presets are imported fr
 | `sensor.<device>_ble_paired_devices` | Number of BLE pair-ids currently stored in NVS (max 50). Updates on pair/clear. |
 | `switch.<device>_ble_pair_mode` | Toggle BLE pairing mode. Auto-turns OFF after 2 min timeout or when a device pairs successfully. Same effect as KEY2 short-press (OEM parity). |
 | `button.<device>_clear_ble_pairings` | Wipe all stored BLE pair-ids from NVS. Existing Smart Control app clients must re-pair afterward. |
+| `update.<device>_firmware` | New project releases for shared factory builds. Install from HA or from the local web UI; adopted Device Builder builds intentionally omit this generic updater. |
 | `text_sensor.<device>_mac_wi_fi` | Wi-Fi MAC address. |
 | `text_sensor.<device>_mac_ble` | BLE MAC address (differs from Wi-Fi MAC by +2 on ESP32). |
 | `text_sensor.<device>_ota_active_partition` | OTA slot the running firmware booted from (label + flash offset). |
@@ -447,12 +448,21 @@ All GPIO assignments were verified against the OEM firmware (which uses the exac
 
 **Just open the hosted installer:** **[crazycoder.github.io/quietcool-esphome-native](https://crazycoder.github.io/quietcool-esphome-native/)** in a Web Bluetooth browser — Chrome or Edge on Windows, macOS, Linux, or Android, or Bluefy on iOS — from any machine within Bluetooth range of the powered hub. Follow the prompts — it flashes via the OEM's own unauthenticated BLE OTA mechanism in under 2 minutes. No UART, no enclosure cracking, and nothing to host: the page already serves the credential-free firmware bin alongside it. (Want to self-host or read the internals? See [`web-installer/`](web-installer/README.md).)
 
-The web installer hosts a **credential-free distribution build** — no Wi-Fi passwords, no API encryption key, no OTA password baked in. Onboarding happens in two automatic steps:
+The web installer hosts a **credential-free factory build** — no Wi-Fi password, API encryption key, or OTA password is baked in. Onboarding is straightforward:
 
 1. **Wi-Fi**: on first boot, the firmware reads the Wi-Fi credentials your OEM controller was already using (stored in flash by the QuietCool app, survives the firmware swap) and joins your network within ~5 s. If the OEM controller was never connected to Wi-Fi, the device falls back to Improv-BLE and you complete onboarding via the web installer.
-2. **Home Assistant adoption**: HA discovers the device via mDNS (it's announcing as `quietcool-atticfan-<id>`). Open **Settings → Devices → Add Integration → ESPHome** and click **Adopt** on the discovered device. The ESPHome dashboard generates a per-device API encryption key + OTA password and pushes them via OTA. From that moment your device has unique secrets — no shared key across users of the same firmware bin.
+2. **Home Assistant**: HA discovers the device through the ESPHome integration as `quietcool-atticfan-<id>`. Add that discovered integration for fan controls and the **Firmware** update entity. You do not need to take control in ESPHome Device Builder for normal use.
 
-If you don't run the ESPHome dashboard add-on, the device works fine unencrypted on a trusted LAN, or you can build your own image with your own keys via Path B.
+The shared factory build checks the project's GitHub Pages manifest every six hours and shortly after boot. When a release is available, install it from Home Assistant's **Firmware** update entity or from the Firmware card at `http://<host>/`. This keeps working without ESPHome Device Builder.
+
+Firmware installed before managed updates were introduced in **1.1.0** needs one
+final manual update through the hub's existing **OTA Update** file form (or the
+Web Installer). Starting with 1.1.0, future project releases appear through the
+managed update paths above.
+
+**Take Control is for users who want to customize or locally compile the firmware.** Device Builder creates a small per-device configuration which references this repository and can add a unique API encryption key. From then on, compile and install updates from Device Builder. The adopted configuration deliberately omits the generic GitHub binary updater because installing that credential-free image would discard the adopted build's personalized API key.
+
+If you do not run Home Assistant, the device and its managed updater also work from the built-in web UI on a trusted LAN. You can instead build an image with your own credentials via Path B.
 
 ### Path B: build from source (developer, any OS)
 
@@ -462,16 +472,16 @@ Works the same on Windows, macOS, and Linux. Install the ESPHome CLI first — `
 git clone https://github.com/CrazyCoder/quietcool-esphome-native.git
 cd quietcool-esphome-native
 cp secrets.yaml.example secrets.yaml         # `copy` on Windows cmd; edit with your Wi-Fi + API key + OTA password
-esphome compile quietcool-atticfan.yaml      # dev build — bakes all secrets in from secrets.yaml
+esphome compile quietcool-atticfan.dev.yaml  # dev build — bakes all secrets in from secrets.yaml
 ```
 
 For a **credential-free distribution build** (the same image hosted by the Web Installer):
 
 ```sh
-esphome -s build_mode dist compile quietcool-atticfan.yaml
+esphome compile quietcool-atticfan.factory.yaml
 # firmware.ota.bin has NO Wi-Fi creds, NO API encryption key, NO OTA password.
 # At boot, oem_nvs_reader imports Wi-Fi creds from the OEM-stored NVS partition.
-# After Wi-Fi joins, the ESPHome dashboard's Adopt flow can push per-device secrets.
+# The factory wrapper adds the GitHub-managed Firmware update entity.
 ```
 
 **Getting a first build onto the hub** — UART is only needed if the board can't boot any firmware at all:
@@ -480,9 +490,9 @@ esphome -s build_mode dist compile quietcool-atticfan.yaml
 - **Bare or bricked board:** UART with the BOOT pin held LOW at power-up:
 
 ```sh
-esphome upload quietcool-atticfan.yaml --device COM5              # Windows
-esphome upload quietcool-atticfan.yaml --device /dev/ttyUSB0      # Linux
-esphome upload quietcool-atticfan.yaml --device /dev/cu.usbserial-XXXX  # macOS
+esphome upload quietcool-atticfan.dev.yaml --device COM5              # Windows
+esphome upload quietcool-atticfan.dev.yaml --device /dev/ttyUSB0      # Linux
+esphome upload quietcool-atticfan.dev.yaml --device /dev/cu.usbserial-XXXX  # macOS
 ```
 
 ### Updating a hub already running this firmware
@@ -491,14 +501,15 @@ Once the hub runs this firmware, every update path is over the air — no enclos
 
 | How | Command / where | Notes |
 |---|---|---|
-| **ESPHome CLI** | `esphome run quietcool-atticfan.yaml --device quietcool-atticfan-<id>.local` | Compiles and OTA-pushes in one step on any OS (`flash.bat` is just a Windows convenience wrapper around the same commands). The push authenticates with the `ota_password` in your `secrets.yaml` — it must match what's on the device. |
-| **ESPHome dashboard** | Device card → **Install** → **Wirelessly** | The GUI path — natural fit for devices adopted into the dashboard, which then manages the per-device OTA password for you. |
+| **Managed release update** | Home Assistant → **Firmware**, or `http://<host>/` → **Firmware** → **Install** | Recommended for the shared factory build. The hub checks the versioned GitHub Pages manifest itself, shows release availability, downloads the matching bin, verifies its MD5, and retains normal rollback protection. |
+| **ESPHome CLI** | `esphome run quietcool-atticfan.dev.yaml --device quietcool-atticfan-<id>.local` | Developer path. Compiles and OTA-pushes in one step on any OS (`flash.bat` wraps the same dev configuration). The push authenticates with the `ota_password` in `secrets.yaml`; it must match the device. |
+| **ESPHome Device Builder** | Device card → **Install** → **Wirelessly** | Canonical path after **Take Control**. The local per-device wrapper keeps the remote `@main` package and personalized API encryption settings; generic release binaries are intentionally not offered. |
 | **Root web-page upload** | Open `http://<host>/` → **OTA Update** → choose file | The original ESPHome Web Server OTA path remains available. Upload this project's `firmware.ota.bin` (or another compatible normal OTA app image) from the phone/computer. It posts to `/update` and retains ordinary app-rollback protection; do not upload a full factory image. |
 | **Device firmware page** | Open `http://<host>/restore-stock` (or enter the host in the bottom card of the [Web Installer](web-installer/README.md)) | Same-origin LAN page for URL flashing and local OEM file restore. For OEM V4.1, click **Use known OEM V4.1**, then **Download and flash URL**—the hub downloads the verified image directly, so no local download/upload is needed. The local-file form is the version-independent fallback for a saved OEM image. |
 | **HTTP flash API** | `curl -X POST -d '' "http://<host>/api/flash_url?url=<bin-url>&md5=<md5>"` | Scriptable version of the URL form. Omit `md5` and the hub fetches `<bin-url>.md5` instead. |
 | **BLE** | OEM `Upgrade` (A=10) from a paired client | Headless flashing with no HA and no browser — see [Path C](#path-c-re-flash-custom-firmware-over-ble) below. |
 
-> **Adopted devices:** after HA **Adopt**, the ESPHome dashboard generates its own per-device wrapper YAML and OTA password, and the dashboard route becomes the path of least resistance. To keep pushing from a clone of this repo instead, copy the dashboard-generated OTA password into your `secrets.yaml`.
+> **Adopted devices:** **Take Control** creates a per-device YAML and makes Device Builder the update owner. Its remote package follows this repository's `main` branch, so each Device Builder compile uses the refreshed project source while retaining local substitutions and the generated API key. Do not install the shared credential-free release bin over an adopted build unless you intentionally want to return to factory update management.
 
 ### Path C: re-flash custom firmware over BLE
 
@@ -517,16 +528,20 @@ This complements the HTTP endpoint (`POST /api/flash_url`) and ESPHome OTA: it's
 ## Repository layout
 
 ```
-  quietcool-atticfan.yaml       # main ESPHome config
+  quietcool-atticfan.yaml       # credential-free config imported on adoption
+  quietcool-atticfan.dev.yaml   # local secrets-based developer wrapper
+  quietcool-atticfan.factory.yaml # shared release wrapper + managed updater
+  firmware-version.yaml         # installed/manifest version (single source of truth)
   wifi-dev.yaml                 # dev — Wi-Fi creds from secrets.yaml
   wifi-dist.yaml                # dist — no Wi-Fi creds; OEM-NVS auto-import
   creds-dev.yaml                # dev — api_encryption_key + ota_password from secrets
-  creds-dist.yaml               # dist — no api/ota secrets; HA Adopt pushes per-user
+  creds-dist.yaml               # shared/adopted base — no API or OTA secret
   partitions.csv                # OEM-compatible: nvs@0x9000, ota_0@0x20000, ota_1@0x200000
   secrets.yaml.example          # template (real secrets.yaml is gitignored)
   flash.bat                     # compile + OTA upload, one shot (Windows sugar — `esphome run` does the same anywhere)
   LICENSE                       # GPL-3.0
   web-installer/                # Web BLE installer + link to device HTTP page (see its README)
+  scripts/generate_update_manifest.py # emits the version/MD5-matched Pages manifest
   components/
     fan_controller/             # speed control + DIP guards + countdown timer + reboot-resume
     led_state_machine/          # 10 Hz LED driver from world state

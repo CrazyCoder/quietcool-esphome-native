@@ -1,5 +1,5 @@
-# Build the credential-free (dist) firmware and publish it together with the
-# Web BLE installer to GitHub Pages.
+# Build the credential-free factory firmware and publish it together with the
+# Web BLE installer and managed-update manifest to GitHub Pages.
 #
 # Every push to main redeploys (requires Settings → Pages → Source: "GitHub
 # Actions", and a public repo — private Pages needs a paid plan).
@@ -39,7 +39,8 @@ jobs:
         run: |
           input_hash="$(
             git ls-files --stage -- \
-                quietcool-atticfan.yaml wifi-dist.yaml creds-dist.yaml \
+                quietcool-atticfan.factory.yaml quietcool-atticfan.yaml \
+                firmware-version.yaml wifi-dist.yaml creds-dist.yaml \
                 partitions.csv components \
               | awk 'index($4, "/test/") == 0' \
               | sha256sum \
@@ -61,10 +62,9 @@ jobs:
           path: |
             web-installer/firmware.ota.bin
             web-installer/firmware.ota.bin.md5
-          key: fw-${{ hashFiles('quietcool-atticfan.yaml', 'wifi-dist.yaml', 'creds-dist.yaml', 'partitions.csv', 'components/**', '!components/**/test/**', '.github/workflows/deploy-pages.yml') }}
+          key: fw-${{ hashFiles('quietcool-atticfan.factory.yaml', 'quietcool-atticfan.yaml', 'firmware-version.yaml', 'wifi-dist.yaml', 'creds-dist.yaml', 'partitions.csv', 'components/**', '!components/**/test/**', '.github/workflows/deploy-pages.yml') }}
 
       - uses: actions/setup-python@v6
-        if: steps.fw-cache.outputs.cache-hit != 'true'
         with:
           python-version: "3.12"
 
@@ -88,11 +88,12 @@ jobs:
         if: steps.fw-cache.outputs.cache-hit != 'true'
         run: pip install "esphome==${ESPHOME_VERSION}"
 
-      # `dist` swaps the dev credential packages for the secret-free ones, so this
-      # build needs no secrets.yaml and bakes in no Wi-Fi creds / API key.
+      # The factory wrapper selects the secret-free packages and adds the
+      # GitHub-managed update entity. It needs no secrets.yaml and bakes in no
+      # Wi-Fi credentials, API key, or OTA password.
       - name: Build dist firmware
         if: steps.fw-cache.outputs.cache-hit != 'true'
-        run: esphome -s build_mode dist compile quietcool-atticfan.yaml
+        run: esphome compile quietcool-atticfan.factory.yaml
 
       - name: Stage firmware + checksum next to the installer
         if: steps.fw-cache.outputs.cache-hit != 'true'
@@ -102,6 +103,20 @@ jobs:
           cp "$BIN" web-installer/firmware.ota.bin
           md5sum "$BIN" | awk '{print $1}' > web-installer/firmware.ota.bin.md5
           echo "Staged firmware ($(du -h "$BIN" | cut -f1)), md5 $(cat web-installer/firmware.ota.bin.md5)"
+
+      - name: Generate managed-update manifest
+        shell: bash
+        run: |
+          args=()
+          previous="$RUNNER_TEMP/previous-update-manifest.json"
+          if curl --fail --silent --show-error \
+              https://crazycoder.github.io/quietcool-esphome-native/manifest.json \
+              --output "$previous"; then
+            args+=(--previous-manifest "$previous")
+          else
+            echo "No previous managed-update manifest; treating this as the first publication."
+          fi
+          python scripts/generate_update_manifest.py "${args[@]}"
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v5
@@ -116,6 +131,7 @@ jobs:
           mkdir release-artifact
           cp web-installer/firmware.ota.bin release-artifact/
           cp web-installer/firmware.ota.bin.md5 release-artifact/
+          cp firmware-version.yaml release-artifact/
           printf '%s:%s\n' "$ESPHOME_VERSION" "$FIRMWARE_INPUT_HASH" \
             > release-artifact/firmware.build-fingerprint
 
@@ -169,6 +185,7 @@ jobs:
           bin="dist/firmware.ota.bin"
           current_sha="$(sha256sum "$bin" | awk '{print $1}')"
           current_fingerprint="$(tr -d '[:space:]' < dist/firmware.build-fingerprint)"
+          firmware_version="$(tr -d '"[:space:]' < dist/firmware-version.yaml)"
           expected_md5="$(tr -d '[:space:]' < dist/firmware.ota.bin.md5)"
           actual_md5="$(md5sum "$bin" | awk '{print $1}')"
           if [[ "$actual_md5" != "$expected_md5" ]]; then
@@ -206,8 +223,7 @@ jobs:
             fi
           fi
 
-          short_sha="${GITHUB_SHA::7}"
-          stem="qc-esphome-${ESPHOME_VERSION}-${short_sha}"
+          stem="qc-esphome-${firmware_version}"
           echo "changed=$changed" >> "$GITHUB_OUTPUT"
           echo "latest_tag=$latest_tag" >> "$GITHUB_OUTPUT"
           echo "stem=$stem" >> "$GITHUB_OUTPUT"
