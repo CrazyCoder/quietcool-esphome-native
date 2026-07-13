@@ -151,7 +151,11 @@ bool OemBleCompat::want_active_() const {
   const bool user_wants = (enable_switch_ == nullptr || enable_switch_->state);
   // Yield the advertising packet to Improv-BLE while it's advertising — both
   // can't fit in 31 bytes. Resumes automatically when Improv goes idle.
-  const bool improv_busy = (improv_ != nullptr && improv_->is_active());
+  // should_start() closes the asynchronous startup gap: WiFiComponent requests
+  // Improv before its service reaches an active state. Without this check OEM
+  // BLE can start during that gap and leave ATTICFAN data in the scan response.
+  const bool improv_busy =
+      (improv_ != nullptr && (improv_->is_active() || improv_->should_start()));
   return user_wants && !improv_busy;
 }
 
@@ -446,6 +450,11 @@ void OemBleCompat::stop_service_() {
     esp32_ble::BLEAdvertising *adv = oem_ble_advertising();
     if (adv != nullptr)
       adv->set_scan_response(true);
+    // The GAP name is global, not service-scoped. Do not let Improv inherit
+    // ATTICFAN_<mac>; a short setup name keeps Improv's structured scan
+    // response within the 31-byte budget and prevents the OEM app from
+    // mistaking an onboarding advertisement for a controllable fan.
+    esp_ble_gap_set_device_name("QuietCool Setup");
 #ifdef USE_WIFI
     // OEM BLE no longer in use — stop biasing the radio against Wi-Fi.
     esp_coex_preference_set(ESP_COEX_PREFER_BALANCE);

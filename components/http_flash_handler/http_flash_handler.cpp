@@ -115,27 +115,35 @@ void HttpFlashHandler::on_ota_state(ota::OTAState state, float progress, uint8_t
 }
 
 void HttpFlashHandler::on_powerdown() {
-  if (!this->erase_esphome_on_powerdown_) return;
+  if (!this->erase_esphome_on_powerdown_ && !this->erase_wifi_on_powerdown_) return;
+  const bool erase_esphome = this->erase_esphome_on_powerdown_;
+  const bool erase_wifi = this->erase_wifi_on_powerdown_;
   this->erase_esphome_on_powerdown_ = false;
+  this->erase_wifi_on_powerdown_ = false;
 
-  // The stock and ESPHome applications share the OEM 16 KB NVS partition.
-  // Remove only ESPHome's private namespace; nvs_flash_erase() would destroy
-  // every OEM namespace, including hx_list pair IDs and user settings.
-  nvs_handle_t handle = 0;
-  esp_err_t err = nvs_open("esphome", NVS_READWRITE, &handle);
-  if (err == ESP_OK) {
-    err = nvs_erase_all(handle);
-    if (err == ESP_OK) err = nvs_commit(handle);
-    nvs_close(handle);
-  }
+  auto erase_namespace = [](const char *name) {
+    nvs_handle_t handle = 0;
+    esp_err_t err = nvs_open(name, NVS_READWRITE, &handle);
+    if (err == ESP_OK) {
+      err = nvs_erase_all(handle);
+      if (err == ESP_OK) err = nvs_commit(handle);
+      nvs_close(handle);
+    }
+    return err;
+  };
 
-  if (err == ESP_OK || err == ESP_ERR_NVS_NOT_FOUND) {
-    ESP_LOGW(TAG, "Erased ESPHome NVS namespace; preserved OEM pairings and settings");
-  } else {
-    // Failure here is non-fatal: leaving ESPHome keys as stock-ignored dead
-    // weight is safer than broadening the erase and losing OEM state.
-    ESP_LOGE(TAG, "Could not erase ESPHome NVS namespace (err=0x%X); OEM state preserved", err);
+  if (erase_esphome) {
+    esp_err_t err = erase_namespace("esphome");
+    if (err != ESP_OK && err != ESP_ERR_NVS_NOT_FOUND)
+      ESP_LOGE(TAG, "Could not erase ESPHome NVS namespace (err=0x%X)", err);
   }
+  if (erase_wifi) {
+    esp_err_t err = erase_namespace("nvs.net80211");
+    if (err != ESP_OK && err != ESP_ERR_NVS_NOT_FOUND)
+      ESP_LOGE(TAG, "Could not erase Wi-Fi NVS namespace (err=0x%X)", err);
+  }
+  ESP_LOGW(TAG, "Reset NVS namespaces: esphome=%s wifi=%s; preserved OEM hx_list",
+           YESNO(erase_esphome), YESNO(erase_wifi));
 }
 
 void HttpFlashHandler::dump_config() {

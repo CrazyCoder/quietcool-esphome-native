@@ -3,7 +3,7 @@
 #   esphome -s build_mode dist compile quietcool-atticfan.yaml
 #
 # First-boot connection flow with this config:
-#   1. oem_nvs_reader (priority 800) reads the ESP-IDF "nvs" namespace and,
+#   1. oem_nvs_reader (priority 800) reads the ESP-IDF "nvs.net80211" namespace and,
 #      if the OEM had stored creds via the QuietCool app or Web Installer,
 #      injects them into ESPHome's WiFi preference slot.
 #   2. WiFiComponent (priority 250) sets up, loads the imported creds,

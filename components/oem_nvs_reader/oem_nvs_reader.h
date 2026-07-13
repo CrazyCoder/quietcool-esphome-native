@@ -1,6 +1,6 @@
 // ESPHome wrapper for the QuietCool OEM-NVS Wi-Fi credential importer.
-// Runs once at boot before WIFI setup. Reads the ESP-IDF "nvs" namespace
-// (where the OEM firmware stored Wi-Fi creds via esp_wifi_set_config),
+// Runs once at boot before WIFI setup. Reads the ESP-IDF "nvs.net80211"
+// namespace (where esp_wifi_set_config persists fixed-width credential blobs),
 // then injects them into ESPHome's WiFiComponent so a credential-free
 // firmware build picks up the user's prior Wi-Fi config seamlessly.
 //
@@ -42,7 +42,8 @@ class OemNvsReader : public Component {
   float get_setup_priority() const override { return setup_priority::HARDWARE; }
 
  protected:
-  // Reads ESP-IDF "nvs" namespace, keys sta.ssid / sta.password.
+  // Reads ESP-IDF "nvs.net80211" blob keys sta.ssid / sta.pswd. Their stored
+  // layouts are uint32 length + ssid[32], and a null-terminated password[65].
   // Returns true iff nvs_open succeeded; *ssid / *password are populated
   // with the values found (empty if a key was missing — not an error).
   // Returns false on hard read failure (corrupt NVS, partition missing).

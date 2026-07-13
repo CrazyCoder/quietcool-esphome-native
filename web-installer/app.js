@@ -37,6 +37,10 @@
 
 const SERVICE_UUID = "000000ff-0000-1000-8000-00805f9b34fb";
 const CHAR_UUID    = "0000ff01-0000-1000-8000-00805f9b34fb";
+const IMPROV_SERVICE_UUID = "00467768-6228-2272-4663-277478268000";
+const IMPROV_STATUS_UUID  = "00467768-6228-2272-4663-277478268001";
+const IMPROV_ERROR_UUID   = "00467768-6228-2272-4663-277478268002";
+const IMPROV_RPC_UUID     = "00467768-6228-2272-4663-277478268003";
 const NAME_PREFIX  = "ATTICFAN";              // OEM BLE device name prefix (advertised as ATTICFAN_<mac>)
 const FACTORY_PAIR_ID = "1234567dsad8wqw9asasd"; // works only on never-paired devices
 
@@ -78,6 +82,84 @@ let pendingTimeout = null;
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
+function buildImprovWifiFrame(ssid, password) {
+  const enc = new TextEncoder();
+  const s = enc.encode(ssid);
+  const p = enc.encode(password);
+  if (!s.length || s.length > 32) throw new Error("SSID must be 1-32 UTF-8 bytes");
+  if (p.length > 63) throw new Error("Password must be at most 63 UTF-8 bytes");
+  const data = new Uint8Array(2 + s.length + p.length);
+  data[0] = s.length;
+  data.set(s, 1);
+  data[1 + s.length] = p.length;
+  data.set(p, 2 + s.length);
+  const frame = new Uint8Array(3 + data.length);
+  frame[0] = 1; // WIFI_SETTINGS
+  frame[1] = data.length;
+  frame.set(data, 2);
+  frame[frame.length - 1] = frame.slice(0, -1).reduce((sum, b) => sum + b, 0) & 0xff;
+  return frame;
+}
+
+async function runImprovWifi() {
+  const ssid = els.ssid.value.trim();
+  const pwd = els.pwd.value;
+  let frame;
+  try { frame = buildImprovWifiFrame(ssid, pwd); }
+  catch (e) { alert(e.message); return; }
+
+  const btn = els.btnImprov;
+  btn.disabled = true;
+  els.cardProgress.style.display = "block";
+  log.el.innerHTML = "";
+  setProgress(5, "Opening the Improv-BLE device picker…");
+  let device;
+  try {
+    device = await navigator.bluetooth.requestDevice({
+      filters: [{ services: [IMPROV_SERVICE_UUID] }],
+      optionalServices: [IMPROV_SERVICE_UUID],
+    });
+    log.ok("Picked Improv device: " + (device.name || device.id));
+    const server = await device.gatt.connect();
+    const service = await server.getPrimaryService(IMPROV_SERVICE_UUID);
+    const statusChar = await service.getCharacteristic(IMPROV_STATUS_UUID);
+    const errorChar = await service.getCharacteristic(IMPROV_ERROR_UUID);
+    const rpcChar = await service.getCharacteristic(IMPROV_RPC_UUID);
+    await statusChar.startNotifications();
+    await errorChar.startNotifications();
+
+    setProgress(30, "Connected to Improv; sending Wi-Fi credentials…");
+    const result = new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("Timed out waiting for Wi-Fi connection")), 45000);
+      const finish = fn => value => { clearTimeout(timer); fn(value); };
+      statusChar.addEventListener("characteristicvaluechanged", event => {
+        const state = event.target.value.getUint8(0);
+        log.out("Improv state: 0x" + state.toString(16).padStart(2, "0"));
+        if (state === 3) setProgress(65, "Device is connecting to Wi-Fi…");
+        if (state === 4) finish(resolve)(true);
+      });
+      errorChar.addEventListener("characteristicvaluechanged", event => {
+        const code = event.target.value.getUint8(0);
+        if (code) finish(reject)(new Error("Improv error 0x" + code.toString(16).padStart(2, "0")));
+      });
+    });
+    for (let i = 0; i < frame.length; i += CHUNK_SIZE) {
+      const chunk = frame.slice(i, i + CHUNK_SIZE);
+      if (rpcChar.writeValueWithResponse) await rpcChar.writeValueWithResponse(chunk);
+      else await rpcChar.writeValue(chunk);
+    }
+    await result;
+    setProgress(100, "Wi-Fi connected and saved.");
+    log.ok("Improv provisioning succeeded. OEM BLE will resume after Improv shuts down.");
+  } catch (e) {
+    setProgress(0, "Improv provisioning failed — see log.");
+    log.err("ERROR: " + e.message);
+  } finally {
+    try { if (device?.gatt?.connected) device.gatt.disconnect(); } catch (e) {}
+    btn.disabled = false;
+  }
+}
+
 
 function checkCompat() {
   const hasBluetooth = "bluetooth" in navigator && typeof navigator.bluetooth.requestDevice === "function";
@@ -92,6 +174,8 @@ function checkCompat() {
   if (!hasBluetooth) {
     els.btnFlash.disabled = true;
     els.btnFlash.textContent = "Browser not supported";
+    els.btnImprov.disabled = true;
+    els.btnImprov.textContent = "Browser not supported";
     return false;
   }
   return true;
@@ -681,6 +765,7 @@ window.addEventListener("DOMContentLoaded", () => {
     urlInfo:        document.getElementById("url-info"),
     pairid:         document.getElementById("pairid"),
     btnFlash:       document.getElementById("btn-flash"),
+    btnImprov:      document.getElementById("btn-improv-wifi"),
     cardProgress:   document.getElementById("card-progress"),
     cardDone:       document.getElementById("card-done"),
     progbar:        document.getElementById("progbar"),
@@ -754,4 +839,5 @@ window.addEventListener("DOMContentLoaded", () => {
 
   els.btnDisconnect.addEventListener("click", disconnectFromHub);
   els.btnFlash.addEventListener("click", runFlashFlow);
+  els.btnImprov.addEventListener("click", runImprovWifi);
 });

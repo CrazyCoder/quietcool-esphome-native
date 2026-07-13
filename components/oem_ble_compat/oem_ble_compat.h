@@ -202,7 +202,8 @@ class OemBleCompat : public Component {
 
   // True when the OEM BLE service should be running right now: the user wants
   // it on (enable switch unset or ON) AND Improv-BLE isn't currently
-  // advertising. Computed fresh each loop() — no persisted "was on" flag.
+  // advertising or has been requested and is still starting. Computed fresh
+  // each loop() — no persisted "was on" flag.
   bool want_active_() const;
 
   // ── Members ──

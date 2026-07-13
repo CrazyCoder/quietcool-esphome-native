@@ -62,8 +62,8 @@ enum class OemImportDecision : uint8_t {
 
 // Input to the decision: everything the wrapper observed at boot time.
 struct OemImportInput {
-  std::string nvs_ssid;          // result of nvs_get_str(handle, "sta.ssid")
-  std::string nvs_password;      // result of nvs_get_str(handle, "sta.password")
+  std::string nvs_ssid;          // nvs.net80211 blob "sta.ssid"
+  std::string nvs_password;      // nvs.net80211 blob "sta.pswd"
   bool nvs_read_ok = false;      // false if nvs_open or the get_str calls failed
   bool marker_already_set = false;     // qc_oem_imported_v1 already true
   bool esphome_has_saved_sta = false;  // ESPHome wifi already has its own creds

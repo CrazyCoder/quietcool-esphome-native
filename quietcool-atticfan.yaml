@@ -531,7 +531,10 @@ button:
             format: "FACTORY RESET: wiping ESPHome NVS + rebooting (Improv-BLE advertises on next boot)"
         - delay: 100ms
         - lambda: |-
-            global_preferences->reset();
+            // global_preferences->reset() calls nvs_flash_erase() on ESP32 and
+            // destroys shared OEM/ESP-IDF state (pair IDs, fan metadata, and
+            // nvs.net80211 Wi-Fi). Erase only ESPHome during final powerdown.
+            id(http_flasher).request_factory_reset_finalize();
             App.safe_reboot();
 
   # --- OEM BLE pairing management. "Clear BLE Pairings" wipes all

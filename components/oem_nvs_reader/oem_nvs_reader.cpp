@@ -7,6 +7,7 @@
 #include "nvs_flash.h"
 #endif
 
+#include <algorithm>
 #include <cstring>
 
 namespace esphome {
@@ -106,21 +107,22 @@ bool OemNvsReader::read_oem_nvs_(std::string *ssid, std::string *password) {
 
 #ifdef USE_ESP_IDF
   nvs_handle_t handle = 0;
-  esp_err_t err = nvs_open("nvs", NVS_READONLY, &handle);
+  // esp_wifi persists wifi_config_t fields in its system namespace as fixed-
+  // width blobs. Stock SetRouter reaches this path through esp_wifi_set_config.
+  // These are not strings in a namespace called "nvs": live boot diagnostics
+  // and partition dumps confirm nvs.net80211/{sta.ssid,sta.pswd}.
+  esp_err_t err = nvs_open("nvs.net80211", NVS_READONLY, &handle);
   if (err != ESP_OK) {
     // ESP_ERR_NVS_NOT_FOUND is the normal "no nvs namespace" path on a fresh
     // device — log INFO not WARN to avoid spamming dump_config on every boot.
-    ESP_LOGI(TAG, "nvs_open(\"nvs\", READONLY) returned %s — no OEM creds to import",
+    ESP_LOGI(TAG, "nvs_open(\"nvs.net80211\", READONLY) returned %s — no OEM creds to import",
              esp_err_to_name(err));
     return false;
   }
 
-  // sta.ssid — 32 chars + null per IEEE 802.11, but the OEM may store up to
-  // its own buffer size. We accept any length up to a sanity cap and pass
-  // through to ESPHome which truncates at 32 in save_wifi_sta.
-  auto read_str = [&](const char *key, std::string *out) -> bool {
+  auto read_blob = [&](const char *key, size_t max_size, std::vector<uint8_t> *out) -> bool {
     size_t len = 0;
-    esp_err_t e = nvs_get_str(handle, key, nullptr, &len);
+    esp_err_t e = nvs_get_blob(handle, key, nullptr, &len);
     if (e == ESP_ERR_NVS_NOT_FOUND) {
       out->clear();
       return true;  // missing key is not a hard failure
@@ -130,33 +132,50 @@ bool OemNvsReader::read_oem_nvs_(std::string *ssid, std::string *password) {
                esp_err_to_name(e));
       return false;
     }
-    // nvs_get_str's sizing call reports the length *including* the null
-    // terminator, so a stored (even empty) string is always len >= 1; the
-    // genuinely-absent case is the ESP_ERR_NVS_NOT_FOUND branch above.
-    if (len > 256) {  // sanity cap — defensively reject malformed entries
-      ESP_LOGW(TAG, "nvs_get_str(\"%s\") returned implausible len=%u",
+    if (len == 0 || len > max_size) {
+      ESP_LOGW(TAG, "nvs_get_blob(\"%s\") returned implausible len=%u",
                key, static_cast<unsigned>(len));
       return false;
     }
-    std::string buf(len, '\0');
-    e = nvs_get_str(handle, key, &buf[0], &len);
+    out->assign(len, 0);
+    e = nvs_get_blob(handle, key, out->data(), &len);
     if (e != ESP_OK) {
-      ESP_LOGW(TAG, "nvs_get_str(\"%s\") read failed: %s", key,
+      ESP_LOGW(TAG, "nvs_get_blob(\"%s\") read failed: %s", key,
                esp_err_to_name(e));
       return false;
     }
-    // nvs_get_str writes a null-terminated string; len includes the null.
-    // Strip the terminator from the std::string so .size() matches strlen.
-    if (!buf.empty() && buf.back() == '\0') buf.pop_back();
-    *out = std::move(buf);
     return true;
   };
 
-  // ESP-IDF's wpa_supplicant stores creds under these keys when
-  // esp_wifi_set_config(WIFI_IF_STA, ...) is called — the same keys the OEM
-  // firmware wrote them under.
-  const bool ok = read_str("sta.ssid", ssid) &&
-                  read_str("sta.password", password);
+  std::vector<uint8_t> ssid_blob;
+  std::vector<uint8_t> password_blob;
+  bool ok = read_blob("sta.ssid", 36, &ssid_blob) &&
+            read_blob("sta.pswd", 65, &password_blob);
+  if (ok && !ssid_blob.empty()) {
+    // ESP-IDF stores the SSID as uint32 length + uint8_t ssid[32]. Confirmed
+    // against the factory/post-OTA NVS image (36-byte blob).
+    if (ssid_blob.size() != 36) {
+      ESP_LOGW(TAG, "sta.ssid blob has unexpected size=%u",
+               static_cast<unsigned>(ssid_blob.size()));
+      ok = false;
+    } else {
+      uint32_t ssid_len = 0;
+      std::memcpy(&ssid_len, ssid_blob.data(), sizeof(ssid_len));
+      if (ssid_len > 32) {
+        ESP_LOGW(TAG, "sta.ssid blob has invalid embedded length=%u",
+                 static_cast<unsigned>(ssid_len));
+        ok = false;
+      } else {
+        ssid->assign(reinterpret_cast<const char *>(ssid_blob.data() + 4), ssid_len);
+      }
+    }
+  }
+  if (ok && !password_blob.empty()) {
+    // ESP-IDF stores a 65-byte null-terminated password buffer.
+    auto end = std::find(password_blob.begin(), password_blob.end(), uint8_t{0});
+    password->assign(reinterpret_cast<const char *>(password_blob.data()),
+                     static_cast<size_t>(end - password_blob.begin()));
+  }
   nvs_close(handle);
   return ok;
 #else

@@ -58,6 +58,13 @@ class HttpFlashHandler : public Component, public ota::OTAStateListener {
     erase_esphome_on_powerdown_ = true;
   }
 
+  // Factory-reset replacement-firmware state and Wi-Fi while preserving OEM
+  // hx_list pairings, fan metadata, thresholds, and presets.
+  void request_factory_reset_finalize() {
+    erase_esphome_on_powerdown_ = true;
+    erase_wifi_on_powerdown_ = true;
+  }
+
   // OTAStateListener. Fires synchronously from OtaHttpRequestComponent::flash()
   // (main-loop context) — on OTA_COMPLETED it runs just before App.safe_reboot(),
   // which is our window to rewrite otadata in time.
@@ -73,6 +80,7 @@ class HttpFlashHandler : public Component, public ota::OTAStateListener {
   // on_powerdown() puts this after ESPHome's normal shutdown preference sync,
   // so no pending preference writes can recreate the namespace before reboot.
   bool erase_esphome_on_powerdown_ = false;
+  bool erase_wifi_on_powerdown_ = false;
 };
 
 }  // namespace quietcool

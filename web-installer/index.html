@@ -195,6 +195,13 @@
     <label for="pwd">Wi-Fi password (max 63 chars)</label>
     <input id="pwd" type="password" placeholder="••••••••" autocomplete="off" autocapitalize="off" spellcheck="false">
 
+    <div class="callout">
+      <strong>Already seeing an Improv setup device?</strong> If replacement
+      firmware is running but offline, provision it directly—no OEM pair ID or
+      firmware flash is needed.
+      <button id="btn-improv-wifi" class="secondary" style="margin-top:10px">Provision via Improv-BLE</button>
+    </div>
+
     <h2 style="margin-top:18px">5. Firmware URL</h2>
     <p class="muted" id="url-target-info"></p>
     <input id="url" type="url" autocapitalize="off" spellcheck="false">
@@ -285,6 +292,6 @@
     Source &amp; design: <a style="color:var(--accent)" href="https://github.com/CrazyCoder/quietcool-esphome-native">quietcool-esphome-native</a> · OEM device QuietCool IT-AF-SMT
   </p>
 </main>
-<script src="./app.js?v=2"></script>
+<script src="./app.js?v=3"></script>
 </body>
 </html>
