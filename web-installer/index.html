@@ -257,13 +257,13 @@
   <div class="card" id="card-esphome-flash">
     <h2>Already running the ESPHome firmware?</h2>
     <p class="muted">Open the firmware page served by the hub itself. It can flash a compatible firmware URL or upload a locally saved OEM application <code>.bin</code>. Running the forms on the hub avoids browsers blocking an HTTPS installer from posting to a plain-HTTP LAN device.</p>
-    <p class="muted">The local-file path is version-independent, so it keeps working even if QuietCool removes an old firmware download URL. The page also has a one-click preset for the known OEM <code>V4.1</code> image.</p>
+    <p class="muted"><strong>No download is required to restore the known OEM V4.1.</strong> On the device page, click <strong>Use known OEM V4.1</strong>, then <strong>Download and flash URL</strong>; the hub downloads the verified image itself. The local-file form is the version-independent fallback if the vendor URL disappears.</p>
 
     <label for="esphome-host">Device hostname or IP</label>
     <input id="esphome-host" type="text" placeholder="quietcool-atticfan-XXXXXX.local" autocomplete="off" autocapitalize="off" spellcheck="false">
     <p class="muted">Enter the mDNS name the device announces, or its LAN IP. A port is optional. Do not add a path.</p>
 
-    <button id="btn-open-device-firmware" style="margin-top:12px">Open device firmware page</button>
+    <button id="btn-open-device-firmware" style="margin-top:12px">Open device firmware page (URL or file)</button>
 
     <details>
       <summary>How does this work? / troubleshooting</summary>

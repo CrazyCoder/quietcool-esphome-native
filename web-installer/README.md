@@ -89,6 +89,12 @@ device hostname or IP—such as `quietcool-atticfan-abcdef.local` or a LAN IP—
 click **Open device firmware page**. The browser navigates to
 `http://<host>/restore-stock`; the hostname is remembered for the next visit.
 
+Restoring the known OEM V4.1 still requires no firmware download on the user's
+phone or computer: click **Use known OEM V4.1**, then **Download and flash URL**.
+The preset fills the verified URL and MD5, and the hub downloads the image itself.
+The local-file form is a separate, version-independent fallback for when the
+vendor URL is unavailable or the user already has another OEM release saved.
+
 That device-local page offers:
 
 - **Flash firmware from a URL** — any `http://` or `https://` URL the hub's Wi-Fi
@@ -103,6 +109,12 @@ shows an accepted/downloading state. Local upload shows percentage, then an
 image-verification state. On success the browser remains on the page with reboot
 guidance rather than navigating to the endpoint's plain-text response. Failures
 re-enable the controls so the user can correct the input and retry.
+
+The standard ESPHome upload remains available separately at `http://<host>/`:
+use its **OTA Update** file picker for this project's `firmware.ota.bin` or another
+compatible normal OTA application image. That root-page upload posts to `/update`
+and retains ordinary app rollback. The `/restore-stock` local-file form is only
+for an explicit permanent OEM restore and rejects this project's own image.
 
 **Partition layout requirement.** The hub's flash uses the OEM IT-AF-SMT layout:
 `nvs` @ `0x9000`, `otadata` @ `0xd000`, `phy_init` @ `0xf000`, `coredump` @
