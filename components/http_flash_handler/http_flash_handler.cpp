@@ -200,7 +200,7 @@ images retain rollback protection. The exact OEM V4.1 preset is made permanent.<
 computer. This path keeps working if a vendor download URL disappears.</p>
 <div class="warning"><strong>Permanent foreign-firmware restore:</strong> the uploaded
 slot is marked valid and will not automatically roll back. Use only OEM firmware for
-the QuietCool IT-AF-SMT—not a full-flash dump, bootloader, or ESPHome image.</div>
+the QuietCool IT-AF-SMT&mdash;not a full-flash dump, bootloader, or ESPHome image.</div>
 <form id="file-form" method="post" enctype="multipart/form-data"
  action="/api/restore_stock_file?confirm=RESTORE_OEM_FIRMWARE">
 <p><input id="firmware-file" type="file" name="firmware" accept=".bin,application/octet-stream" required></p>
@@ -322,7 +322,7 @@ fileForm.addEventListener("submit",event=>{
   xhr.send(body);
 });
 </script></body></html>)html";
-      request->send(200, "text/html", PAGE);
+      request->send(200, "text/html; charset=utf-8", PAGE);
       return;
     }
 
