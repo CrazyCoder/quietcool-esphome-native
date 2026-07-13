@@ -77,9 +77,11 @@ rollback goes through the HTTP path, not BLE.
 Factory restore via this page rewrites only the app partition and erases only the
 private `esphome` NVS namespace during final shutdown. The OEM `hx_list` namespace
 is preserved, including BLE pair IDs, Smart Mode thresholds, presets, timer defaults,
-and fan metadata. Pairing and settings persistence across this corrected path still
-needs live hardware verification. A real reset-to-defaults still requires the KEY1
-5-second long-hold on the hub and intentionally wipes the whole NVS partition.
+and fan metadata. Repeated live Web Installer round trips from ESPHome to OEM V4.1
+and back confirmed that pair IDs still authenticate and presets plus distinctive OEM
+settings persist. The KEY1 5-second Factory Reset clears Wi-Fi credentials and
+ESPHome preferences for re-onboarding but also deliberately preserves OEM `hx_list`;
+use **Clear BLE Pairings** separately when the stored phone list must be removed.
 
 ### Path 2: HTTP flash (any URL onto an ESPHome-running hub)
 
