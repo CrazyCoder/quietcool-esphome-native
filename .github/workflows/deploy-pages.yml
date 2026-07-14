@@ -48,6 +48,53 @@ jobs:
           )"
           echo "hash=$input_hash" >> "$GITHUB_OUTPUT"
 
+      # ESPHome builds are not byte-reproducible, so a rebuild of unchanged
+      # sources yields different bytes — which the manifest generator would
+      # (correctly) refuse to publish under an unbumped version. When the
+      # latest firmware release was built from identical inputs, stage its
+      # published binary instead of rebuilding: workflow-only edits and cache
+      # evictions then never change the shipped bytes.
+      - name: Reuse published firmware for unchanged inputs
+        id: fw-published
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          FIRMWARE_INPUT_HASH: ${{ steps.firmware-inputs.outputs.hash }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          reused=false
+          current_fingerprint="${ESPHOME_VERSION}:${FIRMWARE_INPUT_HASH}"
+          latest_tag="$(
+            gh release list --limit 100 --exclude-drafts --exclude-pre-releases \
+              --json tagName \
+              --jq '[.[] | select(.tagName | startswith("qc-esphome-"))] | first | .tagName // ""'
+          )"
+          if [[ -n "$latest_tag" ]]; then
+            published="$RUNNER_TEMP/published-firmware"
+            mkdir -p "$published"
+            if gh release download "$latest_tag" \
+                --pattern 'qc-esphome-*' --dir "$published"; then
+              fp_file="$(find "$published" -maxdepth 1 -type f -name 'qc-esphome-*.build-fingerprint' -print -quit)"
+              bin_file="$(find "$published" -maxdepth 1 -type f -name 'qc-esphome-*.bin' -print -quit)"
+              md5_file="$(find "$published" -maxdepth 1 -type f -name 'qc-esphome-*.bin.md5' -print -quit)"
+              if [[ -n "$fp_file" && -n "$bin_file" && -n "$md5_file" ]] \
+                  && [[ "$(tr -d '[:space:]' < "$fp_file")" == "$current_fingerprint" ]] \
+                  && [[ "$(md5sum "$bin_file" | awk '{print $1}')" == "$(tr -d '[:space:]' < "$md5_file")" ]]; then
+                cp "$bin_file" web-installer/firmware.ota.bin
+                md5sum web-installer/firmware.ota.bin | awk '{print $1}' \
+                  > web-installer/firmware.ota.bin.md5
+                reused=true
+                echo "Reusing published firmware from $latest_tag (inputs unchanged)."
+              else
+                echo "Latest release $latest_tag does not match current inputs; building."
+              fi
+            else
+              echo "::warning::Could not download assets of $latest_tag; building instead"
+            fi
+          fi
+          echo "reused=$reused" >> "$GITHUB_OUTPUT"
+
       # Reuse the previously-built firmware when nothing that feeds the dist
       # build has changed — site-only pushes then skip the whole ESP-IDF
       # toolchain (~4-5 min) and deploy in well under a minute. The key hashes
@@ -55,8 +102,11 @@ jobs:
       # host-side component tests are deliberately excluded) plus this workflow
       # file, so an ESPHome version bump below forces a rebuild. If GitHub
       # evicts the cache (~7 days unused), the next push just rebuilds once.
+      # Skipped when the published image was reused above — restoring the cache
+      # would overwrite the staged files.
       - name: Restore built firmware
         id: fw-cache
+        if: steps.fw-published.outputs.reused != 'true'
         uses: actions/cache@v6
         with:
           path: |
@@ -73,7 +123,7 @@ jobs:
       # C++ can go stale across config changes, and `esphome clean` does not clear
       # it — a from-scratch build guarantees the artifact matches the source.
       - name: Cache PlatformIO toolchain
-        if: steps.fw-cache.outputs.cache-hit != 'true'
+        if: steps.fw-published.outputs.reused != 'true' && steps.fw-cache.outputs.cache-hit != 'true'
         uses: actions/cache@v6
         with:
           path: |
@@ -85,18 +135,18 @@ jobs:
       # Pinned for reproducible firmware artifacts. Bump this (and the cache key
       # above) in lockstep with the version you build/test with locally.
       - name: Install ESPHome
-        if: steps.fw-cache.outputs.cache-hit != 'true'
+        if: steps.fw-published.outputs.reused != 'true' && steps.fw-cache.outputs.cache-hit != 'true'
         run: pip install "esphome==${ESPHOME_VERSION}"
 
       # The factory wrapper selects the secret-free packages and adds the
       # GitHub-managed update entity. It needs no secrets.yaml and bakes in no
       # Wi-Fi credentials, API key, or OTA password.
       - name: Build dist firmware
-        if: steps.fw-cache.outputs.cache-hit != 'true'
+        if: steps.fw-published.outputs.reused != 'true' && steps.fw-cache.outputs.cache-hit != 'true'
         run: esphome compile quietcool-atticfan.factory.yaml
 
       - name: Stage firmware + checksum next to the installer
-        if: steps.fw-cache.outputs.cache-hit != 'true'
+        if: steps.fw-published.outputs.reused != 'true' && steps.fw-cache.outputs.cache-hit != 'true'
         run: |
           BIN=.esphome/build/quietcool-atticfan/.pioenvs/quietcool-atticfan/firmware.ota.bin
           test -f "$BIN" || { echo "::error::firmware.ota.bin not found at $BIN"; exit 1; }

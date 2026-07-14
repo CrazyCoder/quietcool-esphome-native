@@ -222,7 +222,10 @@ build-fingerprint assets are named
 `qc-esphome-<firmware-version>-esphome-<esphome-version>` so downloads also
 identify the ESPHome toolchain that built the image. GitHub-generated release notes compare the new
 commit with the previous firmware-release tag. Page-only changes, cache evictions, and
-other rebuilds from the same firmware inputs do not create a release. The live installer
+other rebuilds from the same firmware inputs do not create a release: when the
+latest release was built from identical inputs, the workflow stages its
+published binary instead of rebuilding (ESPHome builds are not
+byte-reproducible), so the shipped bytes only change with a version bump. The live installer
 continues to use its short `./firmware.ota.bin` URL rather than a long GitHub Release
 asset URL.
 
