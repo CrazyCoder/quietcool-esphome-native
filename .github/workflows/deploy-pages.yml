@@ -223,10 +223,16 @@ jobs:
             fi
           fi
 
+          # Asset file names also carry the ESPHome toolchain version (the
+          # fingerprint's first field, always matching the staged binary) so
+          # downloaders can tell which ESPHome release produced the image.
+          esphome_version="${current_fingerprint%%:*}"
           stem="qc-esphome-${firmware_version}"
+          asset_stem="${stem}-esphome-${esphome_version}"
           echo "changed=$changed" >> "$GITHUB_OUTPUT"
           echo "latest_tag=$latest_tag" >> "$GITHUB_OUTPUT"
           echo "stem=$stem" >> "$GITHUB_OUTPUT"
+          echo "asset_stem=$asset_stem" >> "$GITHUB_OUTPUT"
           echo "sha256=$current_sha" >> "$GITHUB_OUTPUT"
 
           if [[ "$changed" == "false" ]]; then
@@ -236,30 +242,31 @@ jobs:
       - name: Prepare release assets
         if: steps.firmware.outputs.changed == 'true'
         env:
-          STEM: ${{ steps.firmware.outputs.stem }}
+          ASSET_STEM: ${{ steps.firmware.outputs.asset_stem }}
           SHA256: ${{ steps.firmware.outputs.sha256 }}
         shell: bash
         run: |
-          cp dist/firmware.ota.bin "$STEM.bin"
-          cp dist/firmware.ota.bin.md5 "$STEM.bin.md5"
-          printf '%s\n' "$SHA256" > "$STEM.bin.sha256"
-          cp dist/firmware.build-fingerprint "$STEM.build-fingerprint"
+          cp dist/firmware.ota.bin "$ASSET_STEM.bin"
+          cp dist/firmware.ota.bin.md5 "$ASSET_STEM.bin.md5"
+          printf '%s\n' "$SHA256" > "$ASSET_STEM.bin.sha256"
+          cp dist/firmware.build-fingerprint "$ASSET_STEM.build-fingerprint"
 
       - name: Publish firmware release
         if: steps.firmware.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           STEM: ${{ steps.firmware.outputs.stem }}
+          ASSET_STEM: ${{ steps.firmware.outputs.asset_stem }}
           PREVIOUS_TAG: ${{ steps.firmware.outputs.latest_tag }}
           SHA256: ${{ steps.firmware.outputs.sha256 }}
         shell: bash
         run: |
           args=(
             "$STEM"
-            "$STEM.bin"
-            "$STEM.bin.md5"
-            "$STEM.bin.sha256"
-            "$STEM.build-fingerprint"
+            "$ASSET_STEM.bin"
+            "$ASSET_STEM.bin.md5"
+            "$ASSET_STEM.bin.sha256"
+            "$ASSET_STEM.build-fingerprint"
             --target "$GITHUB_SHA"
             --title "$STEM"
             --generate-notes
