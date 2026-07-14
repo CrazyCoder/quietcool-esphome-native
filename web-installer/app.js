@@ -43,6 +43,20 @@ const IMPROV_ERROR_UUID   = "00467768-6228-2272-4663-277478268002";
 const IMPROV_RPC_UUID     = "00467768-6228-2272-4663-277478268003";
 const NAME_PREFIX  = "ATTICFAN";              // OEM BLE device name prefix (advertised as ATTICFAN_<mac>)
 const FACTORY_PAIR_ID = "1234567dsad8wqw9asasd"; // works only on never-paired devices
+const STORAGE_KEYS = Object.freeze({
+  pairId: "qc_last_pair_id",
+  pairIds: "qc_pair_ids",
+  ssid: "qc_wifi_ssid",
+  password: "qc_wifi_password",
+});
+const PAIR_ID_REGISTERED_MESSAGE =
+  "This new Pair ID was registered with the hub and saved in this browser. " +
+  "Keep a copy so you can authenticate after restoring stock without entering Pair Mode again.";
+const PAIR_ID_AUTHENTICATED_MESSAGE =
+  "This Pair ID authenticated successfully and was saved in this browser for the next visit.";
+const PAIR_ID_READY_MESSAGE =
+  "This new Pair ID was registered and authenticated successfully. It is saved in this browser; " +
+  "keep a copy so you can authenticate after restoring stock without entering Pair Mode again.";
 
 // Latest production OEM firmware, served from QuietCool's own CDN. Flashing this
 // rolls a hub back to stock. 88 chars — within the OEM Upgrade buffer's 100-char limit.
@@ -106,6 +120,7 @@ async function runImprovWifi() {
   btn.disabled = true;
   els.cardProgress.style.display = "block";
   log.el.innerHTML = "";
+  rememberWifiCredentials(ssid, pwd);
   setProgress(5, "Opening the Improv-BLE device picker…");
   let device;
   try {
@@ -325,25 +340,73 @@ function randomPairId() {
   return Array.from(b, x => x.toString(16).padStart(2, "0")).join("");
 }
 
-function showGeneratedPairId(id) {
+function storageError(action, error) {
+  const message = `Browser-local storage ${action} failed: ${error.message}`;
+  if (log.el) log.err(message);
+  else console.warn(message);
+}
+
+function loadRememberedDetails() {
+  const details = { pairId: null, ssid: null, password: null };
+  try {
+    details.pairId = localStorage.getItem(STORAGE_KEYS.pairId);
+    details.ssid = localStorage.getItem(STORAGE_KEYS.ssid);
+    details.password = localStorage.getItem(STORAGE_KEYS.password);
+  } catch (e) {
+    storageError("read", e);
+  }
+  return details;
+}
+
+function rememberWifiCredentials(ssid, password) {
+  try {
+    localStorage.setItem(STORAGE_KEYS.ssid, ssid);
+    localStorage.setItem(STORAGE_KEYS.password, password);
+  } catch (e) {
+    storageError("save", e);
+  }
+}
+
+function rememberPairId(id) {
+  try {
+    // Set the last-known-good ID first so malformed legacy history cannot
+    // prevent the value used for next-visit autofill from being saved.
+    localStorage.setItem(STORAGE_KEYS.pairId, id);
+    let previous = [];
+    try {
+      const parsed = JSON.parse(localStorage.getItem(STORAGE_KEYS.pairIds) || "[]");
+      if (Array.isArray(parsed)) previous = parsed;
+    } catch (e) {
+      // Replace malformed history below; qc_last_pair_id is still authoritative.
+    }
+    previous = previous.filter(value => value !== id);
+    previous.unshift(id);
+    localStorage.setItem(STORAGE_KEYS.pairIds, JSON.stringify(previous.slice(0, 5)));
+  } catch (e) {
+    storageError("save", e);
+  }
+}
+
+function forgetRememberedDetails() {
+  try {
+    Object.values(STORAGE_KEYS).forEach(key => localStorage.removeItem(key));
+    return true;
+  } catch (e) {
+    storageError("clear", e);
+    return false;
+  }
+}
+
+function showRememberedPairId(id, message) {
   const card = document.getElementById("card-pairid-saved");
   const input = document.getElementById("generated-pairid");
+  const wasHidden = card.style.display === "none";
   input.value = id;
+  document.getElementById("pairid-saved-message").textContent = message;
   card.style.display = "block";
-  // Persist for the next visit. If the user comes back and runs Login mode,
-  // we auto-fill from this. Stored per-device (browser localStorage).
-  try {
-    const prev = JSON.parse(localStorage.getItem("qc_pair_ids") || "[]");
-    if (!prev.includes(id)) {
-      prev.unshift(id);
-      localStorage.setItem("qc_pair_ids", JSON.stringify(prev.slice(0, 5)));
-    }
-    localStorage.setItem("qc_last_pair_id", id);
-  } catch (e) {
-    log.err("localStorage save failed: " + e.message);
-  }
+  rememberPairId(id);
   // Scroll the user to the new card so they actually see it.
-  card.scrollIntoView({ behavior: "smooth", block: "start" });
+  if (wasHidden) card.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 // Diagnostic probes. Runs when Pair (A=14) returns Fail in pair-mode flow.
@@ -383,7 +446,6 @@ async function diagnosticProbes(failedPairId, userPairId) {
     log.out("  → " + JSON.stringify(r2));
     if (resultOk(r2)) {
       log.ok("  Pair acked with a different id. Using this id.");
-      showGeneratedPairId(probeId);
       return { ok: "pair", pairId: probeId, needsReconnect: true };
     }
   } catch (e) { log.err("  Probe 2 error: " + e.message); }
@@ -460,6 +522,7 @@ async function runFlashFlow() {
   els.cardProgress.style.display = "block";
   els.cardDone.style.display = "none";
   log.el.innerHTML = "";
+  rememberWifiCredentials(ssid, pwd);
   setProgress(2, "Opening Bluetooth picker…");
 
   // Connect first (requestDevice + GATT). If the user cancels the picker or
@@ -487,12 +550,12 @@ async function runFlashFlow() {
       // via the KEY2 long-hold or the OEM app's Pair Mode button. Pair (A=14)
       // has a pre-gate slot that fires only when pair_state == 2.
       pairId = randomPairId();
-      showGeneratedPairId(pairId);
       setProgress(15, "Adding new pair (assumes Pair Mode is active)…");
       log.step("Generated random pair-id: " + pairId);
       const pairResp = await sendCommand({ A: 14, P: pairId });
       if (resultOk(pairResp)) {
         log.ok("Pair acked. Reconnecting to commit…");
+        showRememberedPairId(pairId, PAIR_ID_REGISTERED_MESSAGE);
         await reconnectGatt();
       } else {
         // Pair Fail → run diagnostics WITHOUT disconnecting. The hub is still
@@ -509,6 +572,10 @@ async function runFlashFlow() {
             "reset) recovers from that. See the log above for what each probe returned.");
         }
         pairId = diag.pairId;
+        showRememberedPairId(
+          pairId,
+          diag.ok === "pair" ? PAIR_ID_REGISTERED_MESSAGE : PAIR_ID_AUTHENTICATED_MESSAGE
+        );
         if (diag.ok === "pair" && diag.needsReconnect) {
           await reconnectGatt();
         } else if (diag.ok === "login") {
@@ -536,6 +603,10 @@ async function runFlashFlow() {
       useV2Dialect = "A" in loginResp;
       log.ok("Logged in (pair_state := 1, pair-id " + pairId.slice(0, 8) + "…). "
              + "Firmware dialect: " + (useV2Dialect ? "V2 (V4.1+)" : "V1 (pre-V3.9)"));
+      showRememberedPairId(
+        pairId,
+        mode === "pair" ? PAIR_ID_READY_MESSAGE : PAIR_ID_AUTHENTICATED_MESSAGE
+      );
     } else {
       // Diagnostic probe authenticated us using V2 (it sends {A:13}); only
       // V4.1+ would have answered that, so we know it's V2.
@@ -699,11 +770,15 @@ window.addEventListener("DOMContentLoaded", () => {
   // selected install target (ESPHome custom by default).
   els.urlInfo.innerHTML = "URL has a 100-char OEM-side limit. The hub fetches this URL from the Wi-Fi above, not from your phone's connection.";
 
-  // Default the Pair ID field: prefer a previously-saved pair-id from this
-  // browser (e.g., from a prior successful Pair). Otherwise the factory id.
-  let savedPairId = null;
-  try { savedPairId = localStorage.getItem("qc_last_pair_id"); } catch (e) {}
-  els.pairid.value = savedPairId || FACTORY_PAIR_ID;
+  // Restore the last-used credentials. A remembered Pair ID selects Login mode
+  // so a return visit does not accidentally create another pair-list entry.
+  const remembered = loadRememberedDetails();
+  els.pairid.value = remembered.pairId || FACTORY_PAIR_ID;
+  if (remembered.ssid !== null) els.ssid.value = remembered.ssid;
+  if (remembered.password !== null) els.pwd.value = remembered.password;
+  if (remembered.pairId) {
+    document.querySelector('input[name="auth-mode"][value="login"]').checked = true;
+  }
 
   // Wire up the auth-mode AND target radios. Both groups need expand/collapse
   // animations so the visible mode-block highlights itself.
@@ -745,6 +820,22 @@ window.addEventListener("DOMContentLoaded", () => {
       status.textContent = "Clipboard blocked — text selected, press your copy shortcut.";
       status.className = "warn";
     }
+    setTimeout(() => { status.textContent = ""; status.className = "muted"; }, 4000);
+  });
+
+  document.getElementById("btn-forget-details").addEventListener("click", () => {
+    const forgotten = forgetRememberedDetails();
+    els.pairid.value = FACTORY_PAIR_ID;
+    els.ssid.value = "";
+    els.pwd.value = "";
+    document.querySelector('input[name="auth-mode"][value="pair"]').checked = true;
+    updateAuthModeUi();
+    document.getElementById("card-pairid-saved").style.display = "none";
+    const status = document.getElementById("forget-details-status");
+    status.textContent = forgotten
+      ? "Saved Pair ID and Wi-Fi credentials removed from this browser."
+      : "This browser did not allow the saved details to be cleared.";
+    status.className = forgotten ? "ok" : "err";
     setTimeout(() => { status.textContent = ""; status.className = "muted"; }, 4000);
   });
 

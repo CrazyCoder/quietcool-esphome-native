@@ -204,6 +204,9 @@
     <input id="ssid" type="text" placeholder="MyNetwork" autocomplete="off" autocapitalize="off" spellcheck="false">
     <label for="pwd">Wi-Fi password (max 63 chars)</label>
     <input id="pwd" type="password" placeholder="••••••••" autocomplete="off" autocapitalize="off" spellcheck="false">
+    <p class="muted">The last-used Pair ID, Wi-Fi SSID, and Wi-Fi password are saved in this browser for future visits when you start a connection. The password is stored unencrypted in this browser profile.</p>
+    <button id="btn-forget-details" type="button" class="secondary" style="margin-top:8px">Forget saved Pair ID and Wi-Fi</button>
+    <p class="muted" id="forget-details-status" style="margin-top:6px"></p>
 
     <div class="callout">
       <strong>Replacement firmware recovery</strong><br>
@@ -231,8 +234,8 @@
   </div>
 
   <div class="card" id="card-pairid-saved" style="display:none">
-    <h2>⚠️ Save this Pair ID</h2>
-    <p>Generated and registered with the hub. <strong>Copy it now</strong> — if the flash fails, paste it into the <strong>Pair ID</strong> field above to retry without going through the OEM app's Pair Mode again. Also auto-saved to this browser's local storage.</p>
+    <h2>⚠️ Keep this Pair ID</h2>
+    <p id="pairid-saved-message"></p>
     <div class="row" style="margin-top:10px">
       <input id="generated-pairid" type="text" readonly onclick="this.select()" style="flex:1; font-family:ui-monospace,Menlo,Consolas,monospace; font-size:14px">
       <button id="btn-copy-pairid" class="secondary" style="flex:0 0 auto; width:auto; padding:12px 16px">Copy</button>
@@ -285,6 +288,7 @@
       <li>The OEM firmware does <strong>not</strong> verify signatures on OTA images — anything reachable at the firmware URL gets flashed. Only point this at images you trust.</li>
       <li>If the hub has been paired with the QuietCool Smart Control app on Android or iOS, the factory test pair ID stops working — use the <em>put it into pair mode</em> option instead.</li>
       <li>Wi-Fi password is transmitted in cleartext over BLE (an OEM trait, not ours). Acceptable for a one-shot bootstrap; BLE range is ~10 m.</li>
+      <li>The last-used Wi-Fi password is stored unencrypted in this browser profile for convenient retries. Use <strong>Forget saved Pair ID and Wi-Fi</strong> on a shared device.</li>
       <li>If the host serving the firmware uses HTTPS, the hub trusts standard public CAs. If your cert isn't trusted, fall back to plain <code>http://</code>.</li>
     </ul>
   </div>
@@ -293,6 +297,6 @@
     Source &amp; design: <a style="color:var(--accent)" href="https://github.com/CrazyCoder/quietcool-esphome-native">quietcool-esphome-native</a> · OEM device QuietCool IT-AF-SMT
   </p>
 </main>
-<script src="./app.js?v=5"></script>
+<script src="./app.js?v=6"></script>
 </body>
 </html>

@@ -29,6 +29,21 @@ lifecycle:
    HTTPS-to-HTTP mixed content, which browsers may block. The local-file path is
    version-independent and keeps working if the vendor removes an old firmware URL.
 
+### Remembered installer details
+
+When a user starts the Web BLE flash flow or Improv provisioning, the page saves
+the entered Wi-Fi SSID and password in browser-local storage. After a Pair or
+Login command succeeds, it also saves and prominently displays the accepted Pair
+ID. On the next visit, the form restores those values and selects Login mode when
+a known Pair ID is available, avoiding another physical Pair Mode cycle after a
+stock restore.
+
+These values are scoped to the installer origin and browser profile. The Wi-Fi
+password is stored unencrypted, so the page discloses that behavior and provides
+a **Forget saved Pair ID and Wi-Fi** button that clears the saved Pair ID, Pair ID
+history, SSID, and password. The separately remembered ESPHome hostname is not
+cleared by that button.
+
 ## Layout
 
 ```
@@ -37,6 +52,10 @@ app.js            # Web BLE logic (PairMode / Pair / Login / Upgrade / SetRouter
 manifest.json     # version metadata
 README.md         # this file
 ```
+
+Run `node scripts/test_web_installer.js` from the repository root for the
+browser-local storage regression checks, and `node --check web-installer/app.js`
+for a syntax-only check.
 
 `manifest.json` is generated from `firmware-version.yaml` and the exact staged
 binary by `scripts/generate_update_manifest.py`. Besides deployment metadata, it
@@ -263,12 +282,15 @@ are not.
 3. **Wi-Fi password leaks in cleartext over BLE during SetRouter.** This is an OEM
    trait, not this project's. Acceptable for a one-shot bootstrap (BLE range
    ~10 m), not for repeated use.
-4. **Factory test pair ID only works on never-paired devices.** If the hub has been
+4. **The installer remembers Wi-Fi credentials in browser-local storage.** The
+   password is unencrypted within that browser profile. Use **Forget saved Pair ID
+   and Wi-Fi** on a shared device or after the convenience is no longer needed.
+5. **Factory test pair ID only works on never-paired devices.** If the hub has been
    paired (e.g. via the QuietCool Smart Control app on Android or iOS), the
    wizard re-pairs with a fresh random
-   UUID first, then logs in with that. A disconnect/reconnect is required between
+   ID first, then logs in with that. A disconnect/reconnect is required between
    Pair and Login because the V2 firmware commits pair state only on disconnect.
-5. **Ordinary custom images keep ESP-IDF app rollback.** If one fails validation
+6. **Ordinary custom images keep ESP-IDF app rollback.** If one fails validation
    after boot, the bootloader can fall back to the previous OTA slot. The exact
    verified OEM restore is deliberately marked VALID so stock stays installed;
    if that known image unexpectedly fails to boot, UART is the recovery path.
