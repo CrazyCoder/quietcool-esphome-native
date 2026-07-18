@@ -74,7 +74,7 @@ After flashing and pairing, the device exposes the entities below. The fan, sens
 
 | Entity | Purpose |
 |---|---|
-| `fan.<device>_attic_fan` | The fan. Preset modes are the available speed names per DIP wiring (Low, Med, High). Operating mode (Timer/Run/Smart) is controlled by the separate Fan Mode select — see below. |
+| `fan.<device>_attic_fan` | The fan. Preset modes are the available speed names per DIP wiring (Low, Med, High). Operating mode (Timer/Run/Smart) is controlled by the separate Fan Mode select — see below. **In Smart Mode this entity reports "on" the whole time Smart Mode is armed**, even while the blades are idle — see [Smart Mode](#5-smart-mode-oem-th-mode--autonomous-temphumidity-control). |
 | `select.<device>_fan_mode` | Operating mode: **Timer** / **Run** / **Smart** (default Timer). Run drops the countdown timer; Smart hands control to the autonomous temp/humidity logic. Lives in the device Configuration panel. See [Modes & timers](#modes--timers). |
 | `sensor.<device>_runtime_remaining` | Live countdown of any active timer, in minutes. 0 when idle. |
 | `sensor.<device>_temperature` | Attic temperature in °F (SHT30 sensor on the hub). |
@@ -256,6 +256,7 @@ data: {speed: off, minutes: 0}
 - Set **Fan Mode** to **"Smart"** in HA's device Configuration panel (or call `select.select_option` with `entity_id: select.<device>_fan_mode, option: Smart`). Also accessible via REST: `POST /select/fan_mode/set?option=Smart`.
 - **No HA or Wi-Fi needed** — Smart Mode runs autonomously. If HA goes down, the fan keeps controlling itself.
 - Any manual speed change, timer start, or turn-off cancels Smart Mode. To re-enter, select "Smart" again.
+- **While Smart Mode is armed, `fan.<device>_attic_fan` reports "on"** — including while the blades are idle between threshold triggers. "On" here means the fan is engaged and under autonomous control, so the fan card's toggle doubles as the manual-override switch: flipping it off is what exits Smart Mode. Whether the blades are actually spinning is shown by `text_sensor.<device>_smart_mode` (`Running` = relays on, `Monitoring` = armed but idle).
 - Thresholds are editable from HA's device Configuration panel. Defaults match OEM factory values (100/90/80 °F, 90/70 %). Temperature thresholds are stored in °C; HA auto-converts the display to match your unit preference.
 - **OEM migration**: on first boot after flashing over OEM firmware, existing Smart Mode thresholds are automatically imported from the OEM NVS partition. No manual re-entry needed.
 

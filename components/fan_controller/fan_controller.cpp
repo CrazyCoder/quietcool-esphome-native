@@ -390,6 +390,10 @@ void FanController::attempt_restore_now_() {
       effective_restore_mode_() == ::qc::RestoreMode::RestoreLastState) {
     ESP_LOGI(TAG, "Restoring Smart Mode from NVS (will engage after sensor stabilization)");
     smart_mode_active_ = true;
+    // Mirror activate_smart_mode(): the fan entity reports ON whenever Smart
+    // Mode is armed, so the restored state must publish ON too.
+    this->state = true;
+    this->publish_state();
     publish_mode_("Smart");
     publish_smart_status_(sensor_stabilized_ ? "Monitoring" : "Stabilizing");
     return;
