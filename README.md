@@ -12,7 +12,7 @@ It does everything the stock firmware does — including fan speeds, the countdo
 
 <a href="https://crazycoder.github.io/quietcool-esphome-native/"><img src="docs/images/web-installer-qr.png" align="right" width="150" alt="QR code — scan with a phone to open the Web Installer" /></a>
 
-**[Open the Web Installer → crazycoder.github.io/quietcool-esphome-native](https://crazycoder.github.io/quietcool-esphome-native/)** from any Bluetooth-equipped computer or phone within radio range of the powered hub — Chrome or Edge on Windows, macOS, Linux, or Android, or Bluefy on iOS. It flashes the ready-to-run, credential-free firmware over the hub's own BLE OTA in about two minutes — no compiling, no downloads, no UART, nothing to host yourself. Step-by-step below: [Installing the firmware](#installing-the-firmware).
+**[Open the Web Installer → crazycoder.github.io/quietcool-esphome-native](https://crazycoder.github.io/quietcool-esphome-native/)** from any Bluetooth-equipped computer or phone within radio range of the powered hub — Chrome or Edge on Windows, macOS, Linux, or Android (iOS/iPadOS is not supported — see [Installing the firmware](#installing-the-firmware)). It flashes the ready-to-run, credential-free firmware over the hub's own BLE OTA in about two minutes — no compiling, no downloads, no UART, nothing to host yourself. Step-by-step below: [Installing the firmware](#installing-the-firmware).
 
 Installing from a phone? **Scan the QR code** instead of typing the URL.
 
@@ -447,7 +447,9 @@ All GPIO assignments were verified against the OEM firmware (which uses the exac
 
 ### Path A: existing hub running OEM firmware (Web BLE) — the easy path
 
-**Just open the hosted installer:** **[crazycoder.github.io/quietcool-esphome-native](https://crazycoder.github.io/quietcool-esphome-native/)** in a Web Bluetooth browser — Chrome or Edge on Windows, macOS, Linux, or Android, or Bluefy on iOS — from any machine within Bluetooth range of the powered hub. Follow the prompts — it flashes via the OEM's own unauthenticated BLE OTA mechanism in under 2 minutes. No UART, no enclosure cracking, and nothing to host: the page already serves the credential-free firmware bin alongside it. (Want to self-host or read the internals? See [`web-installer/`](web-installer/README.md).)
+**Just open the hosted installer:** **[crazycoder.github.io/quietcool-esphome-native](https://crazycoder.github.io/quietcool-esphome-native/)** in a Web Bluetooth browser — Chrome or Edge on Windows, macOS, Linux, or Android — from any machine within Bluetooth range of the powered hub. Follow the prompts — it flashes via the OEM's own unauthenticated BLE OTA mechanism in under 2 minutes. No UART, no enclosure cracking, and nothing to host: the page already serves the credential-free firmware bin alongside it. (Want to self-host or read the internals? See [`web-installer/`](web-installer/README.md).)
+
+**iOS/iPadOS is not supported.** No iOS browser ships a complete Web Bluetooth implementation: Safari has none, Chrome and Edge on iOS run on WebKit underneath and inherit the same gap, and App Store Web-BLE wrapper browsers such as Bluefy implement only a partial API — characteristic notifications, which every step of this installer depends on, are among the reported gaps. Use a desktop, laptop, or Android device instead.
 
 The web installer hosts a **credential-free factory build** — no Wi-Fi password, API encryption key, or OTA password is baked in. Onboarding is straightforward:
 

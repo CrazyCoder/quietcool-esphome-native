@@ -4,7 +4,7 @@
 
 <a href="https://crazycoder.github.io/quietcool-esphome-native/"><img src="../docs/images/web-installer-qr.png" align="right" width="150" alt="QR code — scan with a phone to open the Web Installer" /></a>
 
-**[Open the Web Installer → crazycoder.github.io/quietcool-esphome-native](https://crazycoder.github.io/quietcool-esphome-native/)** in a Web Bluetooth browser (Chrome or Edge on Windows, macOS, Linux, or Android, or Bluefy on iOS) on any computer or phone within Bluetooth range of the hub. It flashes the credential-free firmware over BLE, so there's nothing to build or host.
+**[Open the Web Installer → crazycoder.github.io/quietcool-esphome-native](https://crazycoder.github.io/quietcool-esphome-native/)** in a Web Bluetooth browser (Chrome or Edge on Windows, macOS, Linux, or Android; iOS/iPadOS is not supported) on any computer or phone within Bluetooth range of the hub. It flashes the credential-free firmware over BLE, so there's nothing to build or host.
 
 Installing from a phone? **Scan the QR code** instead of typing the URL. The rest of this document covers self-hosting and the internals.
 
@@ -16,8 +16,10 @@ lifecycle:
 
 1. **Web BLE flow (sections 1–6 on the page).** Flashes the custom ESPHome
    firmware onto a hub still running the stock OEM firmware. Open the page in a Web
-   Bluetooth browser — Chrome or Edge on a Windows/macOS/Linux/Android machine, or
-   Bluefy on iOS — within Bluetooth range of the hub and walk the wizard. The same flow can
+   Bluetooth browser — Chrome or Edge on a Windows/macOS/Linux/Android machine
+   (no iOS browser has a complete Web Bluetooth implementation, and Web-BLE
+   wrapper browsers such as Bluefy fail with this flow) —
+   within Bluetooth range of the hub and walk the wizard. The same flow can
    also re-install OEM `V4.1` on a stock-firmware hub. Once the ESPHome firmware is
    running, this flow no longer serves to change its firmware: the hub still speaks
    the OEM BLE protocol, but its `Upgrade` command refuses QuietCool's firmware
