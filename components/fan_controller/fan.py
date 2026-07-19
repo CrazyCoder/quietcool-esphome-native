@@ -39,6 +39,8 @@ CONF_SMART_TEMP_MED = "smart_temp_med"
 CONF_SMART_TEMP_LOW = "smart_temp_low"
 CONF_SMART_HUM_HIGH = "smart_hum_high"
 CONF_SMART_HUM_LOW = "smart_hum_low"
+CONF_SMART_TEMP_HYST = "smart_temp_hyst"
+CONF_SMART_HUM_HYST = "smart_hum_hyst"
 CONF_SMART_HUM_RESPONSE = "smart_hum_response"
 CONF_SMART_MODE_STATUS = "smart_mode_status"
 CONF_FAN_SPEED_SENSOR = "fan_speed_sensor"
@@ -122,6 +124,8 @@ CONFIG_SCHEMA = (
             cv.Optional(CONF_SMART_TEMP_LOW): cv.use_id(number.Number),
             cv.Optional(CONF_SMART_HUM_HIGH): cv.use_id(number.Number),
             cv.Optional(CONF_SMART_HUM_LOW): cv.use_id(number.Number),
+            cv.Optional(CONF_SMART_TEMP_HYST): cv.use_id(number.Number),
+            cv.Optional(CONF_SMART_HUM_HYST): cv.use_id(number.Number),
             cv.Optional(CONF_MODE_SELECT): cv.use_id(select.Select),
             cv.Optional(CONF_SMART_TEMP_HIGH_SWITCH): cv.use_id(switch.Switch),
             cv.Optional(CONF_SMART_TEMP_MED_SWITCH): cv.use_id(switch.Switch),
@@ -200,6 +204,8 @@ async def to_code(config):
         (CONF_SMART_TEMP_LOW, "set_smart_temp_low"),
         (CONF_SMART_HUM_HIGH, "set_smart_hum_high"),
         (CONF_SMART_HUM_LOW, "set_smart_hum_low"),
+        (CONF_SMART_TEMP_HYST, "set_smart_temp_hyst"),
+        (CONF_SMART_HUM_HYST, "set_smart_hum_hyst"),
         (CONF_MODE_SELECT, "set_mode_select"),
         (CONF_SMART_TEMP_HIGH_SWITCH, "set_smart_temp_high_switch"),
         (CONF_SMART_TEMP_MED_SWITCH, "set_smart_temp_med_switch"),

@@ -138,6 +138,8 @@ On first boot after flashing over OEM firmware, existing presets are imported fr
 | `number.<device>_smart_t_low` | **26.7 °C (80 °F)** | Smart Mode: above this → LOW speed. |
 | `number.<device>_smart_h_high` | **90%** | Smart Mode: above this humidity → STOP (condensation protection). |
 | `number.<device>_smart_h_low` | **70%** | Smart Mode: above this humidity → run at Humidity Response speed. |
+| `number.<device>_smart_temp_hysteresis` | **2 °F** | Smart Mode turn-off deadband. While running, the temperature thresholds are relaxed by this amount so the fan holds until the attic cools this far below the turn-on point (anti-chatter). Set to 0 for exact OEM behavior. A **°F delta** (see the calibration/hysteresis unit note below). |
+| `number.<device>_smart_humidity_hysteresis` | **3 %** | Smart Mode turn-off deadband on the `H Low` humidity trigger. Same idea as the temperature hysteresis. |
 | `select.<device>_smart_h_response` | **Low** | Smart Mode: fan speed when humidity exceeds the low threshold (Off / Low / Medium / High). |
 | `select.<device>_smart_preset` | **Summer** | Active Smart Mode preset. Selecting a preset applies its stored thresholds + enable/disable flags to the live entities. Editing thresholds auto-saves back to the active preset. Options populated from stored preset names (imported from OEM NVS on first boot). At least 1 preset always exists. |
 | `switch.<device>_smart_control_ble` | **ON** | When ON, the firmware advertises the OEM BLE protocol (`ATTICFAN_<mac>`) so the stock QuietCool Smart Control app can discover, pair, and control the fan. **Control only — the app's in-app firmware update does nothing on this firmware (see [Going back to stock](#going-back-to-stock)).** Toggle OFF if you don't use the app — saves BLE radio time. |
@@ -148,8 +150,10 @@ On first boot after flashing over OEM firmware, existing presets are imported fr
 | `switch.<device>_dry_run_mode` | OFF | When ON, suppresses relay GPIO writes while everything else (logic, timer, HA state) runs normally. **Use this during install / debugging** so you can iterate firmware without actually cycling the fan. A deliberate ON persists across reboots, so OTA-flash iteration doesn't re-enable the relays behind your back. |
 | `switch.<device>_resume_on_boot` | OFF | When ON, the firmware persists last speed + Smart Mode state and resumes after a controller reboot. Useful so a brief power blip doesn't kill night-cooling. OFF matches OEM cold-boot (safer). |
 | `switch.<device>_smart_t_high_enabled` (×5) | **ON** | Per-rule enable switches for the five Smart Mode thresholds (T High / T Med / T Low / H High / H Low). Turning one OFF removes that rule from the decision tree. Stored per preset, like the threshold values. |
-| `number.<device>_cal_t` | **0.0 °C** | Calibration offset added to the SHT30 temperature reading (applied before the °C→°F conversion). |
-| `number.<device>_cal_h` | **0.0 %** | Calibration offset added to the SHT30 humidity reading. |
+| `number.<device>_cal_t` | **0.0 °F** | Calibration offset added to the SHT30 temperature reading. Feeds Smart Mode, the over-temp cutoff, and the app-reported temperature — not just the HA display. A **°F delta** (see the unit note below). |
+| `number.<device>_cal_h` | **0.0 %** | Calibration offset added to the SHT30 humidity reading; also feeds Smart Mode. |
+
+**Unit note (Temp Hysteresis and Cal: T):** both are temperature *differences*, not absolute temperatures. Home Assistant only knows how to convert absolute temperatures between °C and °F (it adds the 32° offset), which is wrong for a difference, so these two entities are shown in °F with no unit conversion and the firmware applies them directly. If you run Home Assistant in °C, read them as a °F delta (a 2 °F band is about 1.1 °C). `Cal: T` was previously stored in °C; after updating to this release it resets to 0, so re-enter your offset if you had one.
 
 ### Diagnostic
 
@@ -271,7 +275,7 @@ data: {speed: off, minutes: 0}
 | 5 | humidity **≥** `H Low` (default 70%) | Run at **H Response** speed (default Low; configurable Off/Low/Med/High) |
 | 6 | none of the above | **STOP** |
 
-**Latching behavior (matches OEM):** the decision tree only evaluates when the fan is currently off. Once it starts the fan at a given speed, the fan **latches** at that speed until an external action stops it (HA command, button press, sensor stale, or safety cutoff). The tree then re-evaluates on the next 10-second tick. This prevents relay chatter when temperature hovers near a threshold boundary.
+**Turn-off and hysteresis (matches OEM):** the decision tree re-evaluates on every 10-second tick — whether or not the fan is spinning — so a cooling attic drops the fan back off once the readings fall below the thresholds. Turn-on and turn-off share the same thresholds, matching the OEM. To stop the relays chattering when a reading sits right on a threshold, a configurable **hysteresis** relaxes the turn-off point while the fan is running: it keeps running until the temperature drops `Smart: Temp Hysteresis` below `T High` / `T Med` / `T Low`, or the humidity drops `Smart: Humidity Hysteresis` below `H Low`. Defaults are **2 °F** and **3 %**; set both to 0 for exact OEM behavior (turn-on == turn-off). The condensation cutoff (rule 1) is a hard safety stop and is never relaxed.
 
 On **1-speed wiring**, only rules 1, 2, and 5 apply (with H Response limited to High or Off — Low/Med aren't available). On **2-speed wiring**, rule 3 (T Med) is skipped. The condensation cutoff (rule 1) uses strict `>` — humidity exactly at `H High` does **not** trigger a stop.
 

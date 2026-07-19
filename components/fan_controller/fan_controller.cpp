@@ -4,6 +4,7 @@
 #include "esphome/core/application.h"
 #include "esphome/core/log.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 
@@ -830,26 +831,26 @@ void FanController::smart_tick() {
     return;
   }
 
-  // --- OEM latching: only evaluate the decision tree when the fan is off ---
-  // Once Smart Mode starts the fan, it latches at that speed until an external
-  // action (button, HA command, sensor stale, or over-temp) stops it. Matches
-  // the OEM firmware, which only runs the decision tree while the fan is stopped.
-  if (current_speed_ != ::qc::Speed::Off) {
-    publish_smart_status_("Running");
-    return;
-  }
-
-  publish_smart_status_("Monitoring");
-
-  // --- Smart Mode decision tree ---
+  // --- Smart Mode decision tree — re-evaluated every tick ---
+  // The OEM firmware re-runs its decision tree on every timer callback whether
+  // or not the fan is spinning (its gate byte is a sensor-OK flag, not a
+  // "running" flag — confirmed by RE of smart_mode_th_timer_cb), so a cooling
+  // attic drops the fan back off at the threshold. We match that: evaluate on
+  // every tick, including while running, and drive to Off when the readings
+  // fall. `fan_running` relaxes the thresholds by the configured hysteresis so
+  // our faster 10s tick doesn't chatter the relays at the boundary.
+  const bool running = (current_speed_ != ::qc::Speed::Off);
   auto cfg = build_smart_config_();
   ::qc::Speed target = ::qc::FanControllerLogic::compute_smart_speed(
-      cfg, boot_dip_, temp_c, hum);
+      cfg, boot_dip_, temp_c, hum, running);
 
-  if (target == ::qc::Speed::Off) return;
+  publish_smart_status_(target == ::qc::Speed::Off ? "Monitoring" : "Running");
 
-  ESP_LOGD(TAG, "Smart Mode: temp=%.1f°C hum=%.0f%% -> %s",
-           temp_c, hum,
+  if (target == current_speed_) return;  // no change — leave relays as-is
+
+  ESP_LOGD(TAG, "Smart Mode: temp=%.1f°C hum=%.0f%% running=%d -> %s",
+           temp_c, hum, (int)running,
+           target == ::qc::Speed::Off  ? "Off" :
            target == ::qc::Speed::Low  ? "Low" :
            target == ::qc::Speed::Med  ? "Med" : "High");
 
@@ -870,6 +871,13 @@ void FanController::smart_tick() {
     cfg.hum_high_pct = smart_hum_high_->state;
   if (smart_hum_low_ && std::isfinite(smart_hum_low_->state))
     cfg.hum_low_pct = smart_hum_low_->state;
+  // Turn-off hysteresis. The temp entity is a °F delta (see YAML rationale) —
+  // convert to a °C delta with the difference factor (×5/9, no +32 offset).
+  // The humidity entity is already a plain %RH delta. Guard against negatives.
+  if (smart_temp_hyst_ && std::isfinite(smart_temp_hyst_->state))
+    cfg.temp_hyst_c = std::max(0.0f, smart_temp_hyst_->state) * 5.0f / 9.0f;
+  if (smart_hum_hyst_ && std::isfinite(smart_hum_hyst_->state))
+    cfg.hum_hyst_pct = std::max(0.0f, smart_hum_hyst_->state);
   cfg.hum_response = parse_hum_response_();
   cfg.temp_high_enabled = is_threshold_enabled(::qc::SmartThreshold::TempHigh);
   cfg.temp_med_enabled  = is_threshold_enabled(::qc::SmartThreshold::TempMed);

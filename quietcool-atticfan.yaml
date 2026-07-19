@@ -256,7 +256,11 @@ sensor:
       id: sht30_temp_c
       on_value:
         - lambda: |-
-            id(temp_f).publish_state((x + id(temp_offset_c).state) * 9.0f / 5.0f + 32.0f);
+            // Apply the user's °F calibration delta at the °C source so the same
+            // corrected value feeds Smart Mode, BLE, and the °F display alike.
+            const float cal_c = x + id(temp_offset_f).state * 5.0f / 9.0f;
+            id(sht30_temp_c_cal).publish_state(cal_c);
+            id(temp_f).publish_state(cal_c * 9.0f / 5.0f + 32.0f);
     humidity:
       id: sht30_humidity
       on_value:
@@ -264,21 +268,22 @@ sensor:
             float v = x + id(humidity_offset_rh).state;
             if (v < 0.0f) v = 0.0f;
             if (v > 100.0f) v = 100.0f;
+            id(sht30_humidity_cal).publish_state(v);
             id(humidity_rh).publish_state(v);
 
-  # User-visible Fahrenheit reading. Adds the `Temperature Offset` number
-  # entity (defined in the `number:` block below, defaults to 0.0 °C). The OEM
-  # firmware applies NO calibration of any kind — readings drift high by
-  # 3-8 °C (5-14 °F) in typical attic installations because the SHT30 shares
-  # an enclosure with the ESP32 + AC supply (self-heating). The offset lets
+  # User-visible Fahrenheit reading. Adds the `Cal: T` number entity (a °F
+  # calibration delta, defined in the `number:` block below, defaults to 0.0).
+  # The OEM firmware applies NO calibration of any kind — readings drift high by
+  # 3-8 °C (5-14 °F) in typical attic installations because the SHT30 shares an
+  # enclosure with the ESP32 + AC supply (self-heating). The offset lets
   # end-users empirically null this out per-unit (SHT30 is factory-calibrated
   # but enclosure self-heating dominates the error).
   #
-  # Offset is applied at the °C source (before C→F conversion) so it
-  # propagates correctly to any future °C consumer, and so HA can use
-  # its unit-conversion machinery (device_class=temperature on both the
-  # sensor and the number entity) to show metric users °C and imperial
-  # users °F automatically.
+  # The calibration delta is applied at the °C source by the SHT30 handler above
+  # (sht30_temp_c_cal); this display sensor derives its °F from that corrected
+  # °C, so Smart Mode, BLE, and the display all read the same calibrated value.
+  # It publishes an ABSOLUTE °F value with device_class: temperature, which HA
+  # converts correctly for metric users.
   - platform: template
     name: "Temperature"
     id: temp_f
@@ -295,6 +300,25 @@ sensor:
     device_class: humidity
     state_class: measurement
     accuracy_decimals: 1
+    update_interval: never
+
+  # Calibration-corrected readings that feed Smart Mode + BLE (and the display
+  # sensors above). Internal (no name) — the HA-visible entities are
+  # Temperature/Humidity. Republished by the raw SHT30 handlers, so a changed
+  # Cal: T / Cal: H takes effect on the next 10s sensor read. Applying the
+  # offset here (not just on the display) means calibration actually shifts the
+  # Smart Mode trigger points and the temperature the stock app reads.
+  - platform: template
+    id: sht30_temp_c_cal
+    unit_of_measurement: "°C"
+    device_class: temperature
+    accuracy_decimals: 2
+    update_interval: never
+  - platform: template
+    id: sht30_humidity_cal
+    unit_of_measurement: "%"
+    device_class: humidity
+    accuracy_decimals: 2
     update_interval: never
 
   # Live countdown of the runtime timer (in MINUTES).
@@ -895,13 +919,17 @@ fan:
     default_run_minutes_number: default_run_time
     # Smart Mode — sensor + threshold wiring. The decision tree runs every
     # 10s (see the interval: block above) while Smart Mode is active.
-    temp_sensor: sht30_temp_c
-    humidity_sensor: sht30_humidity
+    # Calibration-corrected readings so Cal: T / Cal: H shift the trigger points
+    # (and the over-temp safety cutoff) rather than only the display.
+    temp_sensor: sht30_temp_c_cal
+    humidity_sensor: sht30_humidity_cal
     smart_temp_high: smart_temp_high
     smart_temp_med: smart_temp_med
     smart_temp_low: smart_temp_low
     smart_hum_high: smart_hum_high
     smart_hum_low: smart_hum_low
+    smart_temp_hyst: smart_temp_hyst
+    smart_hum_hyst: smart_hum_hyst
     smart_temp_high_switch: smart_temp_high_enabled
     smart_temp_med_switch: smart_temp_med_enabled
     smart_temp_low_switch: smart_temp_low_enabled
@@ -942,27 +970,31 @@ number:
     on_value:
       - lambda: 'id(oem_ble).mark_hx_dirty();'
 
-  # --- Temperature offset (°C) — applied to the SHT30's native °C reading
-  # BEFORE the °C→°F conversion, so it propagates to any future °C consumer
-  # and so HA can auto-convert the displayed unit to match user preference
-  # (HA uses `device_class: temperature` to handle metric/imperial users).
-  # Defaults to 0.0 (no correction) so out-of-the-box behavior matches the
-  # OEM. Typical attic-mounted readings run 3-8 °C high due to enclosure
-  # self-heating; setting this to -3.0 °C (-5.4 °F) nulls that.
-  # `restore_value` persists the choice across reboots. ---
+  # --- Temperature offset (°F delta) — added to the user-visible °F reading to
+  # null out per-unit sensor error. Defaults to 0.0 (no correction) so
+  # out-of-the-box behavior matches the OEM. Typical attic-mounted readings run
+  # 3-8 °C (5-14 °F) high due to enclosure self-heating; setting this to about
+  # -6 °F nulls that. `restore_value` persists the choice across reboots.
+  #
+  # UNIT NOTE: this is a temperature *delta*. HA can only convert *absolute*
+  # temperatures for imperial users (×9/5 + 32), which is wrong for a
+  # difference — so the entity is declared in °F with NO
+  # `device_class: temperature` (HA shows it literally, no mis-conversion) and
+  # the firmware adds it directly to the °F reading. Display-only: the raw °C
+  # feeds Smart Mode and BLE. Same unit rationale as `Smart: Temp Hysteresis`.
+  # (Renamed from `temp_offset_c`; the °F change resets a saved value to 0.) ---
   - platform: template
     name: "Cal: T"
-    id: temp_offset_c
+    id: temp_offset_f
     icon: mdi:thermometer-plus
     entity_category: config
-    device_class: temperature
     optimistic: true
     restore_value: true
     initial_value: 0.0
-    min_value: -10.0
-    max_value: 10.0
-    step: 0.1
-    unit_of_measurement: "°C"
+    min_value: -18.0
+    max_value: 18.0
+    step: 0.5
+    unit_of_measurement: "°F"
     mode: box
 
   # --- Humidity offset (%RH) — added to the raw SHT30 humidity reading.
@@ -1064,6 +1096,47 @@ number:
     mode: box
     on_value:
       - lambda: 'id(oem_ble).on_threshold_changed();'
+
+  # --- Smart Mode turn-off hysteresis (anti-chatter deadband). Global, not
+  # per-preset. While the fan is running, the temperature thresholds and the
+  # H Low run-trigger are relaxed by these amounts so the fan holds until the
+  # reading drops a band below the turn-on point, instead of toggling the
+  # relays every 10s when a reading sits on the threshold. Set to 0 for exact
+  # OEM behavior (turn-on == turn-off).
+  #
+  # UNIT NOTE: the temperature entity is a *delta*, not an absolute temperature.
+  # Home Assistant only knows how to convert *absolute* temperatures for
+  # imperial users (×9/5 + 32), which is wrong for a difference. So this entity
+  # is declared in °F with NO `device_class: temperature` — HA shows the value
+  # literally and does not mis-convert it, and the firmware converts the °F
+  # delta to °C internally (×5/9). The same reasoning applies to `Cal: T`. ---
+  - platform: template
+    name: "Smart: Temp Hysteresis"
+    id: smart_temp_hyst
+    icon: mdi:thermometer-lines
+    entity_category: config
+    optimistic: true
+    restore_value: true
+    initial_value: 2.0
+    min_value: 0.0
+    max_value: 20.0
+    step: 0.5
+    unit_of_measurement: "°F"
+    mode: box
+  - platform: template
+    name: "Smart: Humidity Hysteresis"
+    id: smart_hum_hyst
+    icon: mdi:water-percent
+    entity_category: config
+    device_class: humidity
+    optimistic: true
+    restore_value: true
+    initial_value: 3.0
+    min_value: 0.0
+    max_value: 20.0
+    step: 1.0
+    unit_of_measurement: "%"
+    mode: box
 
 select:
   - platform: template
@@ -1211,8 +1284,10 @@ oem_ble_compat:
   # ota.http_request engine the A=10 Upgrade handler drives to flash custom
   # firmware from a BLE-supplied URL (non-OEM domains only; OEM URLs no-op).
   ota_id: http_ota
-  temp_sensor: sht30_temp_c
-  humidity_sensor: sht30_humidity
+  # Calibration-corrected readings so the stock app's GetWorkState/GetParameter
+  # report the same value HA and Smart Mode use.
+  temp_sensor: sht30_temp_c_cal
+  humidity_sensor: sht30_humidity_cal
   smart_temp_high: smart_temp_high
   smart_temp_med: smart_temp_med
   smart_temp_low: smart_temp_low

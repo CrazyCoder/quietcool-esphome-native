@@ -115,6 +115,14 @@ struct SmartConfig {
   float hum_high_pct = 90.0f;   // above this → STOP (condensation protection)
   float hum_low_pct  = 70.0f;   // above this → run at hum_response speed
   Speed hum_response = Speed::Low;  // speed on humidity trigger (Off/Low/Med/High)
+  // Turn-off hysteresis (deadband). Applied ONLY while the fan is already
+  // running: the temperature thresholds and hum_low run-trigger are lowered
+  // by these amounts so the fan keeps running until the reading drops a band
+  // below the turn-on point, instead of chattering at the boundary. 0 = no
+  // deadband (exact OEM behavior: turn-on == turn-off). hum_high (condensation
+  // cutoff) is a hard safety stop and is never relaxed.
+  float temp_hyst_c  = 0.0f;    // °C deadband on the temperature thresholds
+  float hum_hyst_pct = 0.0f;    // %RH deadband on the hum_low run-trigger
   bool temp_high_enabled = true;
   bool temp_med_enabled  = true;
   bool temp_low_enabled  = true;
@@ -430,25 +438,39 @@ class FanControllerLogic {
   //   temp_low → LOW. Humidity trigger: humidity >= hum_low → hum_response.
   // Fail-closed: Dip::None always returns Off.
   static Speed compute_smart_speed(const SmartConfig &cfg, Dip dip,
-                                   float temp_c, float humidity_pct) {
+                                   float temp_c, float humidity_pct,
+                                   bool fan_running = false) {
     if (dip == Dip::None) return Speed::Off;
+    // Condensation cutoff is a hard safety stop — never relaxed by hysteresis.
     if (cfg.hum_high_enabled && humidity_pct > cfg.hum_high_pct) return Speed::Off;
+
+    // Turn-off hysteresis: while the fan is already running, lower the
+    // temperature thresholds and the hum_low run-trigger by the configured
+    // deadband so the fan holds until the reading drops a band below the
+    // turn-on point (prevents chatter at the boundary). When off, or when the
+    // deadband is 0, these equal the raw thresholds (exact OEM turn-on == off).
+    const float hyst_t = fan_running ? cfg.temp_hyst_c : 0.0f;
+    const float hyst_h = fan_running ? cfg.hum_hyst_pct : 0.0f;
+    const float th_high = cfg.temp_high_c - hyst_t;
+    const float th_med  = cfg.temp_med_c - hyst_t;
+    const float th_low  = cfg.temp_low_c - hyst_t;
+    const float hl_low  = cfg.hum_low_pct - hyst_h;
 
     switch (dip) {
       case Dip::TwoSpeed:
-        if (cfg.temp_high_enabled && temp_c >= cfg.temp_high_c) return Speed::High;
-        if (cfg.temp_low_enabled && temp_c >= cfg.temp_low_c) return Speed::Low;
-        if (cfg.hum_low_enabled && humidity_pct >= cfg.hum_low_pct) {
+        if (cfg.temp_high_enabled && temp_c >= th_high) return Speed::High;
+        if (cfg.temp_low_enabled && temp_c >= th_low) return Speed::Low;
+        if (cfg.hum_low_enabled && humidity_pct >= hl_low) {
           if (cfg.hum_response == Speed::High) return Speed::High;
           if (cfg.hum_response == Speed::Low) return Speed::Low;
         }
         return Speed::Off;
 
       case Dip::ThreeSpeed:
-        if (cfg.temp_high_enabled && temp_c >= cfg.temp_high_c) return Speed::High;
-        if (cfg.temp_med_enabled && temp_c >= cfg.temp_med_c) return Speed::Med;
-        if (cfg.temp_low_enabled && temp_c >= cfg.temp_low_c) return Speed::Low;
-        if (cfg.hum_low_enabled && humidity_pct >= cfg.hum_low_pct) {
+        if (cfg.temp_high_enabled && temp_c >= th_high) return Speed::High;
+        if (cfg.temp_med_enabled && temp_c >= th_med) return Speed::Med;
+        if (cfg.temp_low_enabled && temp_c >= th_low) return Speed::Low;
+        if (cfg.hum_low_enabled && humidity_pct >= hl_low) {
           if (cfg.hum_response == Speed::High) return Speed::High;
           if (cfg.hum_response == Speed::Med) return Speed::Med;
           if (cfg.hum_response == Speed::Low) return Speed::Low;
@@ -456,8 +478,8 @@ class FanControllerLogic {
         return Speed::Off;
 
       case Dip::OneSpeed:
-        if (cfg.temp_high_enabled && temp_c >= cfg.temp_high_c) return Speed::High;
-        if (cfg.hum_low_enabled && humidity_pct >= cfg.hum_low_pct && cfg.hum_response == Speed::High)
+        if (cfg.temp_high_enabled && temp_c >= th_high) return Speed::High;
+        if (cfg.hum_low_enabled && humidity_pct >= hl_low && cfg.hum_response == Speed::High)
           return Speed::High;
         return Speed::Off;
 

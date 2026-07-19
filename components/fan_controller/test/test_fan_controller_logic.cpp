@@ -934,6 +934,114 @@ TEST("smart: temp_high disabled, OneSpeed: high temp → Off (only High availabl
   REQUIRE_EQ(FanControllerLogic::compute_smart_speed(cfg, Dip::OneSpeed, 40.0f, 50.0f), Speed::Off);
 }
 
+// ============================================================================
+// Smart Mode hysteresis — the turn-off deadband applied while the fan is
+// running. When fan_running is true, temperature thresholds and the humidity
+// run-trigger (hum_low) are relaxed by the configured hysteresis so the fan
+// keeps running until the reading drops a band below the turn-on point. The
+// condensation cutoff (hum_high) is a hard safety stop and is NOT relaxed.
+// fan_running defaults to false, so every test above exercises the turn-on path.
+// ============================================================================
+
+// --- fan_running=false: hysteresis has no effect on the turn-on decision ---
+TEST("smart hysteresis: fan off ignores hysteresis (turn-on unchanged)") {
+  auto cfg = default_smart();
+  cfg.temp_hyst_c = 2.0f;
+  // Just below the high threshold, fan off: must NOT turn on (needs >= high).
+  REQUIRE_EQ(FanControllerLogic::compute_smart_speed(
+                 cfg, Dip::OneSpeed, cfg.temp_high_c - 1.0f, 50.0f, /*fan_running=*/false),
+             Speed::Off);
+}
+
+// --- fan_running=true: fan stays on within the hysteresis band ---
+TEST("smart hysteresis: OneSpeed stays on within band while running") {
+  auto cfg = default_smart();
+  cfg.temp_hyst_c = 2.0f;
+  // temp_high - 1 is inside [high-2, high): still running.
+  REQUIRE_EQ(FanControllerLogic::compute_smart_speed(
+                 cfg, Dip::OneSpeed, cfg.temp_high_c - 1.0f, 50.0f, /*fan_running=*/true),
+             Speed::High);
+}
+
+// --- fan_running=true: fan turns off once below the band ---
+TEST("smart hysteresis: OneSpeed turns off below band while running") {
+  auto cfg = default_smart();
+  cfg.temp_hyst_c = 2.0f;
+  // temp_high - 3 is below high-2: turn off.
+  REQUIRE_EQ(FanControllerLogic::compute_smart_speed(
+                 cfg, Dip::OneSpeed, cfg.temp_high_c - 3.0f, 50.0f, /*fan_running=*/true),
+             Speed::Off);
+}
+
+// --- Regression for GitHub issue #3: a 1-speed fan must turn off after the
+//     attic cools well below the high threshold instead of latching on. ---
+TEST("smart hysteresis: issue-3 regression — 1-speed fan turns off after cooling") {
+  auto cfg = default_smart();
+  cfg.temp_high_c = 31.11f;  // 88 F turn-on
+  cfg.temp_hyst_c = 1.11f;   // 2 F deadband (default)
+  // Evening cooldown to 78 F (25.56 C) while running: well below 88-2=86 F.
+  REQUIRE_EQ(FanControllerLogic::compute_smart_speed(
+                 cfg, Dip::OneSpeed, 25.56f, 50.0f, /*fan_running=*/true),
+             Speed::Off);
+}
+
+// --- Zero hysteresis reproduces exact OEM behavior (turn-on == turn-off) ---
+TEST("smart hysteresis: zero hysteresis turns off at the threshold while running") {
+  auto cfg = default_smart();  // temp_hyst_c defaults to 0
+  REQUIRE_EQ(FanControllerLogic::compute_smart_speed(
+                 cfg, Dip::OneSpeed, cfg.temp_high_c - 0.01f, 50.0f, /*fan_running=*/true),
+             Speed::Off);
+}
+
+// --- Humidity hysteresis relaxes hum_low while running ---
+TEST("smart hysteresis: humidity band keeps fan on while running") {
+  auto cfg = default_smart();
+  cfg.hum_hyst_pct = 5.0f;
+  cfg.hum_response = Speed::Low;
+  // Temp below all thresholds; humidity inside [hum_low-5, hum_low): still running.
+  REQUIRE_EQ(FanControllerLogic::compute_smart_speed(
+                 cfg, Dip::TwoSpeed, 20.0f, cfg.hum_low_pct - 3.0f, /*fan_running=*/true),
+             Speed::Low);
+}
+
+TEST("smart hysteresis: humidity below band turns fan off while running") {
+  auto cfg = default_smart();
+  cfg.hum_hyst_pct = 5.0f;
+  cfg.hum_response = Speed::Low;
+  REQUIRE_EQ(FanControllerLogic::compute_smart_speed(
+                 cfg, Dip::TwoSpeed, 20.0f, cfg.hum_low_pct - 7.0f, /*fan_running=*/true),
+             Speed::Off);
+}
+
+// --- Condensation cutoff (hum_high) is a hard stop, never relaxed ---
+TEST("smart hysteresis: condensation cutoff not relaxed while running") {
+  auto cfg = default_smart();
+  cfg.hum_hyst_pct = 5.0f;
+  // Temp would drive High, but humidity just over hum_high must still STOP,
+  // even though the fan is running and a humidity hysteresis is configured.
+  REQUIRE_EQ(FanControllerLogic::compute_smart_speed(
+                 cfg, Dip::TwoSpeed, 40.0f, cfg.hum_high_pct + 0.5f, /*fan_running=*/true),
+             Speed::Off);
+}
+
+// --- Cascade: relaxed thresholds still cascade correctly while running ---
+TEST("smart hysteresis: ThreeSpeed stays High within relaxed high band") {
+  auto cfg = default_smart();
+  cfg.temp_hyst_c = 2.0f;
+  REQUIRE_EQ(FanControllerLogic::compute_smart_speed(
+                 cfg, Dip::ThreeSpeed, cfg.temp_high_c - 1.0f, 50.0f, /*fan_running=*/true),
+             Speed::High);
+}
+
+TEST("smart hysteresis: ThreeSpeed drops High->Med below relaxed high band") {
+  auto cfg = default_smart();
+  cfg.temp_hyst_c = 2.0f;
+  // Below high-2 but above med-2: drops one tier to Med rather than off.
+  REQUIRE_EQ(FanControllerLogic::compute_smart_speed(
+                 cfg, Dip::ThreeSpeed, cfg.temp_high_c - 3.0f, 50.0f, /*fan_running=*/true),
+             Speed::Med);
+}
+
 // --- is_overtemp ---
 TEST("is_overtemp: below cutoff → false") {
   REQUIRE_EQ(FanControllerLogic::is_overtemp(80.0f), false);

@@ -101,6 +101,11 @@ class FanController : public Component, public fan::Fan {
   void set_smart_temp_low(number::Number *n) { smart_temp_low_ = n; }
   void set_smart_hum_high(number::Number *n) { smart_hum_high_ = n; }
   void set_smart_hum_low(number::Number *n) { smart_hum_low_ = n; }
+  // Turn-off hysteresis (anti-chatter deadband). The temperature entity is a
+  // °F delta (see YAML) — build_smart_config_ converts it to a °C delta. The
+  // humidity entity is a plain %RH delta. Both are global (not per-preset).
+  void set_smart_temp_hyst(number::Number *n) { smart_temp_hyst_ = n; }
+  void set_smart_hum_hyst(number::Number *n) { smart_hum_hyst_ = n; }
   void set_smart_temp_high_switch(switch_::Switch *s) { set_threshold_switch_(::qc::SmartThreshold::TempHigh, s); }
   void set_smart_temp_med_switch(switch_::Switch *s)  { set_threshold_switch_(::qc::SmartThreshold::TempMed,  s); }
   void set_smart_temp_low_switch(switch_::Switch *s)  { set_threshold_switch_(::qc::SmartThreshold::TempLow,  s); }
@@ -296,6 +301,10 @@ class FanController : public Component, public fan::Fan {
   number::Number *smart_temp_low_ = nullptr;
   number::Number *smart_hum_high_ = nullptr;
   number::Number *smart_hum_low_ = nullptr;
+  // Turn-off hysteresis deadbands (global). Temp entity is a °F delta;
+  // build_smart_config_ converts it to °C. Humidity entity is a %RH delta.
+  number::Number *smart_temp_hyst_ = nullptr;
+  number::Number *smart_hum_hyst_ = nullptr;
   // One slot per qc::SmartThreshold value; nullptr means "no switch wired"
   // (treated as ENABLED at the call sites — OEM-parity default).
   std::array<switch_::Switch*, static_cast<size_t>(::qc::SmartThreshold::Count)> threshold_sw_ = {};
