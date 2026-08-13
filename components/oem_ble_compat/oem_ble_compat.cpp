@@ -369,8 +369,10 @@ void OemBleCompat::start_service_() {
     // Re-set the BLE name + restart advertising now that the service is live.
     const uint8_t *mac = esp_bt_dev_get_address();
     if (mac) {
-      char name[ADV_NAME_BUFFER_SIZE];
-      build_adv_name_(name, sizeof(name));
+      char mac_lower[MAC_ADDRESS_BUFFER_SIZE];
+      format_mac_addr_lower_no_sep(mac, mac_lower);
+      char name[22];
+      snprintf(name, sizeof(name), "ATTICFAN_%s", mac_lower);
       // Set the GAP name (keeps GATT 0x2A00 + active scanners clean). Disable
       // ESPHome's structured scan response and install our padding scan response
       // BEFORE advertising starts, so the very first packet is already clean (no
@@ -391,43 +393,6 @@ void OemBleCompat::start_service_() {
       ESP_LOGI(TAG, "OEM BLE service started");
     }
   }
-}
-
-// Byte 5 of the raw advertising record is what the OEM app reads as the fan
-// model (ExtendedDeviceAdapter.flashHolderView: model = record[5:6], and
-// getDeviceImgAttic maps "1".."7" to a fan photo, everything else to a generic
-// image). With the flags AD occupying bytes 0..2 and the name AD header 3..4,
-// byte 5 is the first character of the advertised name, so the name has to lead
-// with the model digit. The app's own
-// `if (model.equals("A")) name = "A" + name` branch is its fallback for names
-// that start with "ATTICFAN" instead, which is why a hub without the digit
-// still shows the right name but a generic photo.
-//
-// Measured on hardware (dump_adv.py): 02 01 06 | 16 09 'A' 'T' 'T' ... where
-// byte 5 was 'A'. Model "0" (Generic) is a legitimate value and selects the
-// generic image, matching a stock hub whose model is unset.
-void OemBleCompat::build_adv_name_(char *out, size_t len) {
-  const uint8_t *mac = esp_bt_dev_get_address();
-  char mac_lower[MAC_ADDRESS_BUFFER_SIZE] = "";
-  if (mac != nullptr)
-    format_mac_addr_lower_no_sep(mac, mac_lower);
-  const char m = fan_info_.model[0];
-  const char digit = (m >= '0' && m <= '7') ? m : '0';
-  snprintf(out, len, "%cATTICFAN_%s", digit, mac_lower);
-}
-
-// Re-advertise under the current model digit. The model changes at runtime from
-// the HA select and from OEM SetFanInfo, and the photo is read from the
-// advertisement, so the packet has to be rebuilt rather than wait for a reboot.
-void OemBleCompat::refresh_adv_name_() {
-  if (!service_started_)
-    return;
-  char name[ADV_NAME_BUFFER_SIZE];
-  build_adv_name_(name, sizeof(name));
-  esp_ble_gap_set_device_name(name);
-  apply_oem_raw_adv_();
-  esp32_ble::global_ble->advertising_set_service_data_and_name({}, true);
-  ESP_LOGI(TAG, "OEM BLE advertising name: %s", name);
 }
 
 void OemBleCompat::apply_oem_raw_adv_() {
@@ -786,8 +751,6 @@ void OemBleCompat::set_fan_model_by_display(const std::string &display_name) {
   if (fan_name_text_) fan_name_text_->publish_state(fan_info_.name);
   fan_info_pref_.save(&fan_info_);
   mark_hx_dirty();
-  // The advertised name carries the model digit the app reads for the fan photo.
-  refresh_adv_name_();
 }
 
 void OemBleCompat::set_fan_serial(const std::string &serial) {
@@ -1149,9 +1112,6 @@ std::string OemBleCompat::handle_set_fan_info_(cJSON *root) {
   if (fan_model_select_) fan_model_select_->publish_state(::qc::fan_model_display(fan_info_.model));
   if (fan_serial_text_) fan_serial_text_->publish_state(fan_info_.serial);
   syncing_fan_info_ = false;
-
-  // The advertised name carries the model digit the app reads for the fan photo.
-  refresh_adv_name_();
 
   return R"({"A":16,"F":"TRUE"})";
 }
