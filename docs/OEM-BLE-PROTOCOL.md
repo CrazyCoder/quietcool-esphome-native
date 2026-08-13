@@ -72,10 +72,61 @@ The name is built at boot from the hub's Bluetooth MAC formatted as 12 lowercase
 characters with no separators. For example a hub with BT MAC `A4:CF:12:9B:7E:60`
 advertises as `ATTICFAN_a4cf129b7e60` (21 characters).
 
-The OEM app discovers hubs by **name prefix** — it scans for anything beginning
-`ATTICFAN_`. There is no manufacturer-data match and no service-UUID scan filter, so a
-client (or a compatible firmware) only needs to advertise with that name pattern to be
-discoverable. Advertising interval is 320 ms.
+The OEM app discovers hubs by **name prefix**: a scan result is kept only when the
+parsed device name starts with `ATTICFAN`. There is no service-UUID scan filter.
+Advertising interval is 320 ms.
+
+#### The device list reads raw record bytes
+
+Discovery uses the parsed name, but the device list does not. For a hub currently in
+range, the app byte-slices the **raw scan record**, meaning the advertisement and the
+scan response concatenated, decoded as latin-1 with no NUL truncation:
+
+```
+model = record[5]        one byte
+name  = record[6:32]     26 bytes, then trimmed of anything <= U+0020
+if model == "A": name = "A" + name
+```
+
+`model` picks the photo on the row. Only `1` through `7` map to a product image:
+
+| model | product          | model | product                        |
+|-------|------------------|-------|--------------------------------|
+| 0     | Generic          | 4     | AFR SMT ES-2.0 (1st Generation)|
+| 1     | AFG SMT PRO-2.0  | 5     | AFR SMT PRO-1.3                |
+| 2     | AFG SMT PRO-3.0  | 6     | AFR SMT PRO-2.0                |
+| 3     | AFG SMT ES-3.0   | 7     | AFR SMT ES-2.0 (2nd Generation)|
+
+Anything else, including `0`, gives a generic fan. The `A` case is a fallback for a
+record whose byte 5 is the first letter of `ATTICFAN`: it restores the displayed name
+but leaves the photo generic. A row that is out of range uses the model the app has
+cached instead, so a mismatch between the two shows up as the photo changing at the
+moment the hub is discovered.
+
+Byte 5 is wherever the second AD structure's payload starts, since flags occupy bytes
+0 to 2 and an AD header takes two more. Carrying both the model and the name therefore
+takes two AD structures:
+
+```
+02 01 06                            flags
+17 ff '3' "ATTICFAN_<mac>"          manufacturer specific, byte 5 = model
+02 0a 09                            TX power
+16 09 "ATTICFAN_<mac>"              complete local name, in the scan response
+```
+
+The manufacturer payload is `<model><name>`, so byte 5 is the model and bytes 6 to 26
+are the name the list renders. The Complete Local Name structure is what the scan
+filter reads, and it must not carry the model digit, or the name stops matching
+`ATTICFAN` and the hub vanishes from the scan entirely.
+
+Two shapes break the record:
+
+- A record shorter than 32 bytes makes `record[6:32]` throw, and the row renders blank.
+- A zero length byte before the name structure ends AD parsing. Because the scan
+  response is parsed from the same concatenated buffer, padding the advertisement with
+  zeros removes the parsed device name, and the hub disappears from the scan. Pad with
+  a real structure such as TX power instead; being `<= U+0020` it also trims out of
+  `record[6:32]`.
 
 ### Write / notify chunking
 
@@ -357,13 +408,25 @@ version number. Users on QC or engineering app channels may still see V4.3 offer
 
 ```jsonc
 {"A":17}
-{"A":17,"N":"<name>","M":"<model>","S":"<serial>"}
+{"A":17,"N":"<name>","M":"<model>","S":"<serial>","G":"<Yes|No>"}
 
-{"A":16,"N":"Attic","M":"AFG SMT PRO-2.0","S":"…"}
+{"A":16,"N":"AFG SMT PRO-2.0","M":"1","S":"…"}
 {"A":16,"F":"TRUE"}
 ```
 
-Fan name is capped at 32 bytes.
+`M` is a **model code**, a single character `0` to `7`, not a display string. The table
+under [Device name / advertising](#the-device-list-reads-raw-record-bytes) maps the
+codes to products. The app's model picker writes the code and sets `N` to the matching
+product name, which is why a hub set up through the app usually reports a product name
+rather than a user-chosen one.
+
+The same code drives the fan photo in two independent places: the control screen takes
+it from this response, and the device list takes it from advertising byte 5. A hub that
+answers A=17 correctly but does not carry the code in its advertisement shows the right
+photo on the control screen and a generic one in the list.
+
+`G` mirrors GuideSetup, the field SetGuideSetup (A=21) writes. Fan name is capped at 32
+bytes.
 
 ### 5.9 SetMode (A=9)
 
@@ -779,7 +842,12 @@ the protocol above so the **stock QuietCool Smart Control app keeps working** af
 flash it: pairing, `Login`, `GetWorkState`, speed/mode control, Smart Mode thresholds,
 presets, and fan info all behave as the app expects (V2 numeric, `QQ` prefix, same field
 names, same gating). It is exposed as the `Smart Control (BLE)` switch and advertises the
-same `ATTICFAN_<mac>` name. **Pairing is preserved exactly as on stock** — an unpaired hub
+same `ATTICFAN_<mac>` name, with the fan model code in a manufacturer AD so the app's
+device list shows the product photo (see
+[Device name / advertising](#the-device-list-reads-raw-record-bytes)). The
+advertisement is rebuilt when the model changes, so a model set from Home Assistant or
+over BLE takes effect without a reboot.
+**Pairing is preserved exactly as on stock** — an unpaired hub
 enters pair mode only via a physical KEY2 press on the device, and `PairMode` (A=15) is
 auth-gated, so an in-range stranger can't pair themselves remotely (the physical button is
 the trust boundary — treating A=15 as pre-auth would be a remote-pairing hole).
