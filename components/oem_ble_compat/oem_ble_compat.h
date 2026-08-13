@@ -124,6 +124,11 @@ class OemBleCompat : public Component {
   // Idempotent; called on service start and re-asserted via gap_event_handler on
   // every advertising restart (covers BLE disable/enable).
   void apply_oem_raw_adv_();
+  // "<model digit>ATTICFAN_<mac>" — 22 chars + NUL. The leading digit is what
+  // the OEM app reads as the fan model out of advertising byte 5.
+  static constexpr size_t ADV_NAME_BUFFER_SIZE = 23;
+  void build_adv_name_(char *out, size_t len);
+  void refresh_adv_name_();
 
   // ── BLE write handler + response ──
   void on_ble_write_(const std::vector<uint8_t> &data);

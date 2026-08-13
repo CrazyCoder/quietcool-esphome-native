@@ -41,7 +41,8 @@ const IMPROV_SERVICE_UUID = "00467768-6228-2272-4663-277478268000";
 const IMPROV_STATUS_UUID  = "00467768-6228-2272-4663-277478268001";
 const IMPROV_ERROR_UUID   = "00467768-6228-2272-4663-277478268002";
 const IMPROV_RPC_UUID     = "00467768-6228-2272-4663-277478268003";
-const NAME_PREFIX  = "ATTICFAN";              // OEM BLE device name prefix (advertised as ATTICFAN_<mac>)
+const NAME_PREFIX  = "ATTICFAN";              // OEM BLE device name prefix (advertised as [<model>]ATTICFAN_<mac>)
+const MODEL_DIGITS = ["0", "1", "2", "3", "4", "5", "6", "7"];  // OEM fan-model codes that can lead the name
 const FACTORY_PAIR_ID = "1234567dsad8wqw9asasd"; // works only on never-paired devices
 const STORAGE_KEYS = Object.freeze({
   pairId: "qc_last_pair_id",
@@ -256,8 +257,16 @@ async function sendCommand(obj, opts = {}) {
 async function connectToHub() {
   log.step("Requesting BLE device with name prefix " + NAME_PREFIX + "…");
   bleDevice = await navigator.bluetooth.requestDevice({
+    // namePrefix matches from the first character, so a hub advertising
+    // "<model digit>ATTICFAN_<mac>" does not match a bare "ATTICFAN" prefix.
+    // The OEM app reads that leading digit out of advertising byte 5 to pick
+    // the fan photo, so both shapes are in the field: stock and current
+    // firmware lead with the digit, older builds of this firmware do not.
+    // List both rather than drop the name filter, which would show every
+    // nearby BLE device in the chooser.
     filters: [
       { namePrefix: NAME_PREFIX },
+      ...MODEL_DIGITS.map((d) => ({ namePrefix: d + NAME_PREFIX })),
       { services: [SERVICE_UUID] },
     ],
     optionalServices: [SERVICE_UUID],
