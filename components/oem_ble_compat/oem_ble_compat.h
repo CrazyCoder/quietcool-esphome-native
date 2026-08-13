@@ -245,6 +245,14 @@ class OemBleCompat : public Component {
   int upgrade_flash_retries_ = 0;
   static constexpr int UPGRADE_FLASH_MAX_RETRIES = 40;  // ~20s @ 500ms wait-for-Wi-Fi
   bool syncing_fan_info_ = false;  // suppress on_value feedback during BLE→HA push
+  // Config entities are set up at HARDWARE priority (800), long before this
+  // component's AFTER_WIFI setup(). A template select with restore_value
+  // publishes its stored-or-initial option from its own setup(), and that
+  // fires on_value. Without this flag an entity default ("Generic" -> model
+  // "0") would be written over fan info that setup() has not loaded yet, and
+  // would be persisted and queued for hx_list write-through. Entity-originated
+  // writes are ignored until setup() has established fan_info_.
+  bool fan_info_loaded_ = false;
 
   switch_::Switch *pair_mode_switch_ = nullptr;
   int max_pair_ids_ = 50;
