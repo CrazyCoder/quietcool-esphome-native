@@ -6,7 +6,7 @@
 name: Deploy Web installer
 
 env:
-  ESPHOME_VERSION: "2026.6.5"
+  ESPHOME_VERSION: "2026.7.4"
 
 on:
   workflow_dispatch:
@@ -118,15 +118,20 @@ jobs:
         with:
           python-version: "3.12"
 
-      # Cache the ESP-IDF / PlatformIO toolchain (large, and stable for a pinned
-      # ESPHome version). We deliberately do NOT cache .esphome/: its generated
-      # C++ can go stale across config changes, and `esphome clean` does not clear
-      # it — a from-scratch build guarantees the artifact matches the source.
-      - name: Cache PlatformIO toolchain
+      # Cache the ESP-IDF toolchain (large, and stable for a pinned ESPHome
+      # version). ESPHome 2026.7 builds ESP32 with native ESP-IDF by default and
+      # installs it under platformdirs' user cache — ~/.cache/esphome/idf on the
+      # runner — so that path must be cached or every run re-downloads the whole
+      # toolchain. ~/.platformio stays for the pre-2026.7 layout.
+      # We deliberately do NOT cache .esphome/: its generated C++ can go stale
+      # across config changes, and `esphome clean` does not clear it — a
+      # from-scratch build guarantees the artifact matches the source.
+      - name: Cache ESP-IDF toolchain
         if: steps.fw-published.outputs.reused != 'true' && steps.fw-cache.outputs.cache-hit != 'true'
         uses: actions/cache@v6
         with:
           path: |
+            ~/.cache/esphome
             ~/.platformio
             ~/.cache/pip
           key: pio-${{ runner.os }}-esphome-${{ env.ESPHOME_VERSION }}
