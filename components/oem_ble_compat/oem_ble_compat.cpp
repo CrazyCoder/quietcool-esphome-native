@@ -380,8 +380,11 @@ void OemBleCompat::start_service_() {
       // (params, Improv handoff) stays intact — with scan_response_=false it only
       // configures the ADV packet (name once), never a name-bearing scan rsp.
       esp_ble_gap_set_device_name(name);
-      apply_oem_raw_adv_();
+      // ESPHome configures its structured advertisement inside this call, so our
+      // raw payload has to be written after it, not before, or it is discarded.
+      // gap_event_handler re-asserts on every later advertising restart.
       esp32_ble::global_ble->advertising_set_service_data_and_name({}, true);
+      apply_oem_raw_adv_();
 
       ESP_LOGI(TAG, "OEM BLE service started, name: %s (no-scanrsp-name)", name);
       if (ble_mac_sensor_) {
@@ -393,6 +396,16 @@ void OemBleCompat::start_service_() {
       ESP_LOGI(TAG, "OEM BLE service started");
     }
   }
+}
+
+// The model changes at runtime from the HA select and from OEM SetFanInfo, and
+// it is carried in the advertisement, so rebuild the packet instead of waiting
+// for a reboot.
+void OemBleCompat::refresh_adv_name_() {
+  if (!service_started_)
+    return;
+  apply_oem_raw_adv_();
+  ESP_LOGI(TAG, "OEM BLE advertisement rebuilt, model '%c'", fan_info_.model[0]);
 }
 
 void OemBleCompat::apply_oem_raw_adv_() {
@@ -421,8 +434,64 @@ void OemBleCompat::apply_oem_raw_adv_() {
   if (adv != nullptr)
     adv->set_scan_response(false);
 
-  uint8_t scanrsp_raw[6] = {0x02, 0x0a, 0x09, 0x00, 0x00, 0x00};
-  esp_ble_gap_config_scan_rsp_data_raw(scanrsp_raw, sizeof(scanrsp_raw));
+  // Two things have to be true at once, and they cannot come from one AD
+  // structure:
+  //
+  //   1. ScannerRepository.isSmartControlDevice keeps a scan result only when
+  //      getDeviceName().startsWith("ATTICFAN"), so the advertised name must
+  //      still begin with ATTICFAN. Putting the model digit in the name hides
+  //      the hub from the app completely (tried in 833aac6, reverted).
+  //   2. ExtendedDeviceAdapter.flashHolderView reads model = record[5:6] and
+  //      name = record[6:32] out of the raw record, and getDeviceImgAttic maps
+  //      only "1".."7" to a fan photo.
+  //
+  // So the digit comes from a manufacturer AD placed right after flags, whose
+  // payload is <digit>ATTICFAN_<mac>: byte 5 is the digit and bytes 6..26 are
+  // the name text the adapter reads. The real name AD moves to the scan
+  // response, which still feeds getDeviceName(). This mirrors the OEM firmware,
+  // whose log prints exactly that concatenation as "test_manufacturer".
+  //
+  // No zero padding anywhere before the name AD: ScanRecord.parseFromBytes
+  // stops at a 0x00 length byte, and the scan response is parsed from the same
+  // concatenated buffer, so a pad byte here would erase the device name and
+  // trip condition 1. TX power fills the tail instead, and being <= 0x20 it
+  // trims out of the adapter's substring like the padding did.
+  const uint8_t *mac = esp_bt_dev_get_address();
+  if (mac == nullptr)
+    return;
+  char mac_lower[MAC_ADDRESS_BUFFER_SIZE];
+  format_mac_addr_lower_no_sep(mac, mac_lower);
+  const char m = fan_info_.model[0];
+  const char digit = (m >= '0' && m <= '7') ? m : '0';
+
+  char tagged[OEM_TAGGED_NAME_BUFFER_SIZE];  // "<digit>ATTICFAN_<mac>"
+  const int tagged_len =
+      snprintf(tagged, sizeof(tagged), "%cATTICFAN_%s", digit, mac_lower);
+  if (tagged_len < 2 || tagged_len >= (int) sizeof(tagged))
+    return;
+
+  uint8_t advraw[31];
+  size_t n = 0;
+  advraw[n++] = 0x02;
+  advraw[n++] = ESP_BLE_AD_TYPE_FLAG;
+  advraw[n++] = 0x06;
+  advraw[n++] = (uint8_t) (1 + tagged_len);
+  advraw[n++] = ESP_BLE_AD_MANUFACTURER_SPECIFIC_TYPE;
+  memcpy(advraw + n, tagged, tagged_len);
+  n += tagged_len;
+  advraw[n++] = 0x02;
+  advraw[n++] = ESP_BLE_AD_TYPE_TX_PWR;
+  advraw[n++] = 0x09;
+  esp_ble_gap_config_adv_data_raw(advraw, n);
+
+  // Name only, no trailing pad, so AD parsing walks cleanly off the end.
+  uint8_t scanrsp[2 + OEM_TAGGED_NAME_BUFFER_SIZE];
+  size_t s = 0;
+  scanrsp[s++] = (uint8_t) tagged_len;  // type byte + the name without the digit
+  scanrsp[s++] = ESP_BLE_AD_TYPE_NAME_CMPL;
+  memcpy(scanrsp + s, tagged + 1, tagged_len - 1);
+  s += tagged_len - 1;
+  esp_ble_gap_config_scan_rsp_data_raw(scanrsp, s);
 }
 
 void OemBleCompat::gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param) {
@@ -751,6 +820,8 @@ void OemBleCompat::set_fan_model_by_display(const std::string &display_name) {
   if (fan_name_text_) fan_name_text_->publish_state(fan_info_.name);
   fan_info_pref_.save(&fan_info_);
   mark_hx_dirty();
+  // The advertisement carries the model digit the app reads for the fan photo.
+  refresh_adv_name_();
 }
 
 void OemBleCompat::set_fan_serial(const std::string &serial) {
@@ -1112,6 +1183,9 @@ std::string OemBleCompat::handle_set_fan_info_(cJSON *root) {
   if (fan_model_select_) fan_model_select_->publish_state(::qc::fan_model_display(fan_info_.model));
   if (fan_serial_text_) fan_serial_text_->publish_state(fan_info_.serial);
   syncing_fan_info_ = false;
+
+  // The advertisement carries the model digit the app reads for the fan photo.
+  refresh_adv_name_();
 
   return R"({"A":16,"F":"TRUE"})";
 }

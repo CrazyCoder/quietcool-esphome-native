@@ -123,7 +123,12 @@ class OemBleCompat : public Component {
   // name parse stays clean and no name-bearing scan response is ever emitted.
   // Idempotent; called on service start and re-asserted via gap_event_handler on
   // every advertising restart (covers BLE disable/enable).
+  // "<model digit>ATTICFAN_<mac>" + NUL. The digit leads the manufacturer AD so
+  // it lands on record byte 5, which is where the OEM app reads the fan model.
+  static constexpr size_t OEM_TAGGED_NAME_BUFFER_SIZE = 23;
   void apply_oem_raw_adv_();
+  // Rebuild the advertisement after the model changes (HA select, SetFanInfo).
+  void refresh_adv_name_();
 
   // ── BLE write handler + response ──
   void on_ble_write_(const std::vector<uint8_t> &data);
