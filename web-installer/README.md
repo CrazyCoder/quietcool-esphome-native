@@ -260,7 +260,7 @@ server). Build and stage the firmware next to `index.html` yourself:
 
 ```sh
 esphome compile quietcool-atticfan.factory.yaml
-cp .esphome/build/quietcool-atticfan/.pioenvs/quietcool-atticfan/firmware.ota.bin \
+cp .esphome/build/quietcool-atticfan/build/firmware.ota.bin \
    web-installer/firmware.ota.bin
 md5sum web-installer/firmware.ota.bin | awk '{print $1}' \
    > web-installer/firmware.ota.bin.md5

@@ -153,8 +153,23 @@ jobs:
       - name: Stage firmware + checksum next to the installer
         if: steps.fw-published.outputs.reused != 'true' && steps.fw-cache.outputs.cache-hit != 'true'
         run: |
-          BIN=.esphome/build/quietcool-atticfan/.pioenvs/quietcool-atticfan/firmware.ota.bin
-          test -f "$BIN" || { echo "::error::firmware.ota.bin not found at $BIN"; exit 1; }
+          # ESPHome 2026.7 builds ESP32 with native ESP-IDF and writes to
+          # build/; the PlatformIO toolchain wrote to .pioenvs/<name>/. Accept
+          # either, and fail loudly rather than staging a stale image if a
+          # future layout change moves it again.
+          ROOT=.esphome/build/quietcool-atticfan
+          BIN=""
+          for candidate in \
+            "$ROOT/build/firmware.ota.bin" \
+            "$ROOT/.pioenvs/quietcool-atticfan/firmware.ota.bin"; do
+            if [[ -f "$candidate" ]]; then BIN="$candidate"; break; fi
+          done
+          if [[ -z "$BIN" ]]; then
+            echo "::error::firmware.ota.bin not found under $ROOT"
+            find "$ROOT" -name 'firmware*.bin' -printf '  %p\n' 2>/dev/null || true
+            exit 1
+          fi
+          echo "Using $BIN"
           cp "$BIN" web-installer/firmware.ota.bin
           md5sum "$BIN" | awk '{print $1}' > web-installer/firmware.ota.bin.md5
           echo "Staged firmware ($(du -h "$BIN" | cut -f1)), md5 $(cat web-installer/firmware.ota.bin.md5)"

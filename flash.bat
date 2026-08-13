@@ -3,7 +3,8 @@ rem Build + OTA-flash the ESPHome replacement firmware to the live hub.
 rem Run from anywhere — script chdir's to its own directory.
 rem
 rem Stage 1: `esphome compile` produces .esphome\build\quietcool-atticfan\
-rem          .pioenvs\quietcool-atticfan\firmware.bin (ESPHome's "factory" image).
+rem          build\firmware.factory.bin (ESPHome's "factory" image). Older
+rem          PlatformIO-toolchain builds wrote it under .pioenvs\ instead.
 rem Stage 2: `esphome upload` does an mDNS lookup of
 rem          quietcool-atticfan-<mac6>.local, then runs the ESPHome OTA
 rem          handshake using ota.password from secrets.yaml.
