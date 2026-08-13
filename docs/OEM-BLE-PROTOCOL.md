@@ -230,7 +230,7 @@ mode (`pair_state==2`); **auth** = requires `pair_state==1`.
 | 18 | SetSpeed | write | auth | Set fan speed |
 | 19 | GetPresets | read | auth | List saved Smart Mode presets ([§8](#8-presets)) |
 | 20 | SetPresets | write | auth | Write the saved preset list |
-| 21 | SetGuideSetup | write | auth | First-run wizard completion flag |
+| 21 | SetGuideSetup | write | auth | Setup-wizard flag; the app writes `"No"` on every control-screen entry ([§7.2](#72-getparameter)) |
 | 22 | Reset | write | auth | **Factory reset** — wipes NVS incl. pairing list |
 | 28 | GetRecordData | read | auth | 31-day hourly sensor log (binary, [§10](#10-binary-commands)) |
 | 29 | SynchronizeTime | write | auth | Set the hub's clock (binary, [§10](#10-binary-commands)) |
@@ -517,9 +517,16 @@ clarity; on the wire V4.1 uses positional single-char keys):
   "GetHour": "3",           // Timer hours
   "GetMinute": "0",         // Timer minutes
   "GetTime_Range": "LOW",   // Timer speed
-  "GuideSetup": "Yes"       // first-run wizard completed
+  "GuideSetup": "No"        // see below — "No" is the normal steady state
 }
 ```
+
+`GuideSetup` is not a reliable "wizard completed" flag on an attic fan. The OEM app
+calls `SetGuideSetup` unconditionally every time it opens the fan control screen, and
+for an attic fan (`deviceTYPE == 1`) the value it writes is the hard-coded string
+`"No"`, whatever the hub reported. A hub that has been driven from the app therefore
+reads back `"No"` in steady state, on stock firmware as much as on this one. Treat a
+`"No"` here as normal and do not derive setup state from it.
 
 ### 7.3 SetTempHumidity
 
@@ -717,6 +724,13 @@ graphs.
 - **Response** (6 bytes): `QQ 0x7B 0x1D <flag> 0x7D`, where `<flag>` is `0x01` (success)
   or `0x00` (failure). The OEM app wraps it as
   `{"Api":"SynchronizeTime","Flag":"TRUE"}`.
+
+This response gates the app's startup, so a server must answer it. Opening the fan
+control screen runs a fixed chain: `SetGuideSetup` (A=21), then `SynchronizeTime`
+(A=29) on its reply, then `GetRecordData` (A=28) for each logged day on a `Flag`
+of `"TRUE"`, and only once those finish does the app start its ~10 s `GetWorkState`
+poll. Miss or malform any reply in that chain and the app never reaches the poll: it
+holds the loading state until the connection times out.
 
 ---
 
