@@ -3,6 +3,14 @@
 #
 # Every push to main redeploys (requires Settings → Pages → Source: "GitHub
 # Actions", and a public repo — private Pages needs a paid plan).
+#
+# What gets published is decided by firmware-version.yaml, not by whether the
+# firmware bytes changed. While that version matches the latest release, the
+# site keeps serving the released image: a firmware change lands on main, gets
+# compiled here so a build break still fails CI, and its bytes are discarded.
+# Bumping firmware-version.yaml is what turns the next push into a release.
+# That keeps "version" a unique name for one exact image, which the managed
+# update entity depends on, without forcing a release for every firmware edit.
 name: Deploy Web installer
 
 env:
@@ -48,13 +56,18 @@ jobs:
           )"
           echo "hash=$input_hash" >> "$GITHUB_OUTPUT"
 
-      # ESPHome builds are not byte-reproducible, so a rebuild of unchanged
-      # sources yields different bytes — which the manifest generator would
-      # (correctly) refuse to publish under an unbumped version. When the
-      # latest firmware release was built from identical inputs, stage its
-      # published binary instead of rebuilding: workflow-only edits and cache
-      # evictions then never change the shipped bytes.
-      - name: Reuse published firmware for unchanged inputs
+      # Decide whether this push publishes firmware. While firmware-version.yaml
+      # still names the latest release, stage that release's binary and keep the
+      # site on it. Two reasons to prefer the published bytes over a rebuild:
+      # ESPHome builds are not byte-reproducible, so even an unchanged source
+      # tree yields a different image, and republishing different bytes under an
+      # unchanged version would make that version ambiguous for the managed
+      # update entity. Bumping the version is what selects a fresh build.
+      #
+      # `validate` marks the case where the inputs did change under an unbumped
+      # version: compile anyway so a build break fails CI, then throw the image
+      # away.
+      - name: Resolve firmware to publish
         id: fw-published
         env:
           GH_TOKEN: ${{ github.token }}
@@ -64,13 +77,21 @@ jobs:
         run: |
           set -euo pipefail
           reused=false
+          validate=false
           current_fingerprint="${ESPHOME_VERSION}:${FIRMWARE_INPUT_HASH}"
+          fingerprint="$current_fingerprint"
+          current_version="$(tr -d '"[:space:]' < firmware-version.yaml)"
           latest_tag="$(
             gh release list --limit 100 --exclude-drafts --exclude-pre-releases \
               --json tagName \
               --jq '[.[] | select(.tagName | startswith("qc-esphome-"))] | first | .tagName // ""'
           )"
-          if [[ -n "$latest_tag" ]]; then
+          published_version="${latest_tag#qc-esphome-}"
+          if [[ -z "$latest_tag" ]]; then
+            echo "No published firmware release yet; building for first publication."
+          elif [[ "$published_version" != "$current_version" ]]; then
+            echo "firmware-version.yaml is $current_version, published is $published_version; building for release."
+          else
             published="$RUNNER_TEMP/published-firmware"
             mkdir -p "$published"
             if gh release download "$latest_tag" \
@@ -79,21 +100,31 @@ jobs:
               bin_file="$(find "$published" -maxdepth 1 -type f -name 'qc-esphome-*.bin' -print -quit)"
               md5_file="$(find "$published" -maxdepth 1 -type f -name 'qc-esphome-*.bin.md5' -print -quit)"
               if [[ -n "$fp_file" && -n "$bin_file" && -n "$md5_file" ]] \
-                  && [[ "$(tr -d '[:space:]' < "$fp_file")" == "$current_fingerprint" ]] \
                   && [[ "$(md5sum "$bin_file" | awk '{print $1}')" == "$(tr -d '[:space:]' < "$md5_file")" ]]; then
                 cp "$bin_file" web-installer/firmware.ota.bin
                 md5sum web-installer/firmware.ota.bin | awk '{print $1}' \
                   > web-installer/firmware.ota.bin.md5
                 reused=true
-                echo "Reusing published firmware from $latest_tag (inputs unchanged)."
+                # Describe the bytes we actually ship, not the tree that built them.
+                fingerprint="$(tr -d '[:space:]' < "$fp_file")"
+                if [[ "$fingerprint" == "$current_fingerprint" ]]; then
+                  echo "Inputs unchanged; serving $latest_tag."
+                else
+                  validate=true
+                  echo "Firmware inputs changed while firmware-version.yaml is still $current_version." \
+                       "Compiling to validate, and serving $latest_tag. Bump the version to publish." \
+                    | tee -a "$GITHUB_STEP_SUMMARY"
+                fi
               else
-                echo "Latest release $latest_tag does not match current inputs; building."
+                echo "::warning::Assets of $latest_tag are incomplete or corrupt; building instead"
               fi
             else
               echo "::warning::Could not download assets of $latest_tag; building instead"
             fi
           fi
           echo "reused=$reused" >> "$GITHUB_OUTPUT"
+          echo "validate=$validate" >> "$GITHUB_OUTPUT"
+          echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
 
       # Reuse the previously-built firmware when nothing that feeds the dist
       # build has changed — site-only pushes then skip the whole ESP-IDF
@@ -127,7 +158,7 @@ jobs:
       # across config changes, and `esphome clean` does not clear it — a
       # from-scratch build guarantees the artifact matches the source.
       - name: Cache ESP-IDF toolchain
-        if: steps.fw-published.outputs.reused != 'true' && steps.fw-cache.outputs.cache-hit != 'true'
+        if: steps.fw-published.outputs.validate == 'true' || (steps.fw-published.outputs.reused != 'true' && steps.fw-cache.outputs.cache-hit != 'true')
         uses: actions/cache@v6
         with:
           path: |
@@ -140,14 +171,16 @@ jobs:
       # Pinned for reproducible firmware artifacts. Bump this (and the cache key
       # above) in lockstep with the version you build/test with locally.
       - name: Install ESPHome
-        if: steps.fw-published.outputs.reused != 'true' && steps.fw-cache.outputs.cache-hit != 'true'
+        if: steps.fw-published.outputs.validate == 'true' || (steps.fw-published.outputs.reused != 'true' && steps.fw-cache.outputs.cache-hit != 'true')
         run: pip install "esphome==${ESPHOME_VERSION}"
 
       # The factory wrapper selects the secret-free packages and adds the
       # GitHub-managed update entity. It needs no secrets.yaml and bakes in no
       # Wi-Fi credentials, API key, or OTA password.
+      # When `validate` is set this compiles purely as a build check: the image
+      # is never staged, and the published one ships instead.
       - name: Build dist firmware
-        if: steps.fw-published.outputs.reused != 'true' && steps.fw-cache.outputs.cache-hit != 'true'
+        if: steps.fw-published.outputs.validate == 'true' || (steps.fw-published.outputs.reused != 'true' && steps.fw-cache.outputs.cache-hit != 'true')
         run: esphome compile quietcool-atticfan.factory.yaml
 
       - name: Stage firmware + checksum next to the installer
@@ -193,16 +226,19 @@ jobs:
         with:
           path: web-installer
 
+      # The fingerprint describes the staged bytes, so when the published image
+      # was reused it carries that release's fingerprint rather than this tree's.
+      # The release job compares it to decide whether anything new exists.
       - name: Prepare firmware release artifact
         env:
-          FIRMWARE_INPUT_HASH: ${{ steps.firmware-inputs.outputs.hash }}
+          FIRMWARE_FINGERPRINT: ${{ steps.fw-published.outputs.fingerprint }}
         shell: bash
         run: |
           mkdir release-artifact
           cp web-installer/firmware.ota.bin release-artifact/
           cp web-installer/firmware.ota.bin.md5 release-artifact/
           cp firmware-version.yaml release-artifact/
-          printf '%s:%s\n' "$ESPHOME_VERSION" "$FIRMWARE_INPUT_HASH" \
+          printf '%s\n' "$FIRMWARE_FINGERPRINT" \
             > release-artifact/firmware.build-fingerprint
 
       # Preserve the exact dist image outside the Pages tarball so the release
