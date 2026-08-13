@@ -103,9 +103,6 @@ void OemBleCompat::setup() {
     fan_info_ = FanInfo{};
     import_fan_info_from_nvs_();
   }
-  // fan_info_ is authoritative from here on, so entity-originated writes are
-  // real user intent rather than a config entity publishing its own default.
-  fan_info_loaded_ = true;
 
   // Presets: hx_list NVS is the source of truth (written by flush_hx_list_
   // on every 30s debounce + clean shutdown). ESPHome preference is only a
@@ -735,7 +732,7 @@ void OemBleCompat::clear_pairings() {
 }
 
 void OemBleCompat::set_fan_name(const std::string &name) {
-  if (!fan_info_loaded_ || syncing_fan_info_) return;
+  if (syncing_fan_info_) return;
   copy_bounded_(fan_info_.name, name.c_str());
   fan_info_pref_.save(&fan_info_);
   mark_hx_dirty();
@@ -745,7 +742,7 @@ void OemBleCompat::set_fan_name(const std::string &name) {
 // fan name" behavior): the OEM picker shows the model display string in the
 // fan-name field, so we surface it the same way.
 void OemBleCompat::set_fan_model_by_display(const std::string &display_name) {
-  if (!fan_info_loaded_ || syncing_fan_info_) return;
+  if (syncing_fan_info_) return;
   copy_bounded_(fan_info_.model, ::qc::fan_model_index(display_name.c_str()));
   copy_bounded_(fan_info_.name, display_name.c_str());
   if (fan_name_text_) fan_name_text_->publish_state(fan_info_.name);
@@ -754,7 +751,7 @@ void OemBleCompat::set_fan_model_by_display(const std::string &display_name) {
 }
 
 void OemBleCompat::set_fan_serial(const std::string &serial) {
-  if (!fan_info_loaded_ || syncing_fan_info_) return;
+  if (syncing_fan_info_) return;
   copy_bounded_(fan_info_.serial, serial.c_str());
   fan_info_pref_.save(&fan_info_);
   mark_hx_dirty();
