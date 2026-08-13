@@ -194,64 +194,84 @@ inline ModeFlags parse_oem_mode(const char *m) {
 // complete when the buffer contains balanced braces (JSON) or when a
 // binary command marker is detected at byte[1].
 struct FrameAssembler {
+  // Ceiling on a single buffered message. The largest legitimate request is
+  // SetPresets with 4 fully-populated presets (~400 bytes); Upgrade with a
+  // 100-char URL is ~115. Without a ceiling, a client that writes bytes which
+  // never complete a frame — no auth required, framing happens before the
+  // command gate — grows this vector until the heap runs out.
+  static constexpr size_t MAX_BUFFERED = 1024;
+
   std::vector<uint8_t> buf;
 
-  void feed(const uint8_t *data, size_t len) {
+  // Returns false when the incoming data would exceed MAX_BUFFERED; the buffer
+  // is dropped in that case so the session resynchronises on the next message
+  // instead of staying wedged.
+  bool feed(const uint8_t *data, size_t len) {
+    if (buf.size() + len > MAX_BUFFERED) {
+      buf.clear();
+      return false;
+    }
     buf.insert(buf.end(), data, data + len);
+    return true;
   }
 
   // Returns true when a complete frame is available.
-  bool has_complete() const {
-    if (buf.empty()) return false;
-    // Binary commands: buf[0]=='{' and buf[1]==0x1C or 0x1D
-    if (buf.size() >= 4 && buf[0] == '{' &&
-        (buf[1] == 0x1C || buf[1] == 0x1D)) {
-      return buf.back() == '}';
-    }
-    // JSON: count braces
-    int depth = 0;
-    for (uint8_t b : buf) {
-      if (b == '{') ++depth;
-      else if (b == '}') { --depth; if (depth == 0) return true; }
-    }
-    return false;
-  }
+  bool has_complete() const { return frame_end_() != 0; }
 
-  // Extracts the complete message and resets the buffer.
+  // Extracts the complete message and removes it from the buffer.
   std::vector<uint8_t> take() {
-    std::vector<uint8_t> result;
-    if (buf.empty()) return result;
-
-    // Binary: take through last '}'
-    if (buf.size() >= 4 && buf[0] == '{' &&
-        (buf[1] == 0x1C || buf[1] == 0x1D)) {
-      for (size_t i = 0; i < buf.size(); ++i) {
-        if (buf[i] == '}') {
-          result.assign(buf.begin(), buf.begin() + i + 1);
-          buf.erase(buf.begin(), buf.begin() + i + 1);
-          return result;
-        }
-      }
-      return result;  // shouldn't reach here if has_complete()==true
-    }
-
-    // JSON: take through the balanced closing brace
-    int depth = 0;
-    for (size_t i = 0; i < buf.size(); ++i) {
-      if (buf[i] == '{') ++depth;
-      else if (buf[i] == '}') {
-        --depth;
-        if (depth == 0) {
-          result.assign(buf.begin(), buf.begin() + i + 1);
-          buf.erase(buf.begin(), buf.begin() + i + 1);
-          return result;
-        }
-      }
-    }
+    size_t end = frame_end_();
+    if (end == 0) return {};
+    std::vector<uint8_t> result(buf.begin(), buf.begin() + end);
+    buf.erase(buf.begin(), buf.begin() + end);
     return result;
   }
 
   void clear() { buf.clear(); }
+
+ private:
+  // The two binary commands are fixed-length on the wire:
+  //   GetRecordData   '{' 0x1C <day-index> '}'                    =  4 bytes
+  //   SynchronizeTime '{' 0x1D <10 ASCII epoch digits> '}'        = 13 bytes
+  // Frame them by that length rather than by scanning for '}': the day-index is
+  // a raw byte that can itself be 0x7D ('}'), and a length-framed read also
+  // cannot be confused by a following command already sitting in the buffer.
+  // Returns 0 when the head of the buffer is not a binary command.
+  size_t binary_len_() const {
+    if (buf.size() < 2 || buf[0] != '{') return 0;
+    if (buf[1] == 0x1C) return 4;
+    if (buf[1] == 0x1D) return 13;
+    return 0;
+  }
+
+  // Index one past the end of the complete frame at the head of the buffer,
+  // or 0 if no complete frame is buffered yet.
+  size_t frame_end_() const {
+    size_t blen = binary_len_();
+    if (blen != 0) return (buf.size() >= blen) ? blen : 0;
+
+    // JSON: balanced braces, ignoring any brace inside a string literal.
+    // Field values carry arbitrary user text — a Wi-Fi password or URL may
+    // legitimately contain '{' or '}', and counting those would cut the frame
+    // mid-message and leave the remainder to corrupt every later command.
+    int depth = 0;
+    bool in_string = false, escaped = false;
+    for (size_t i = 0; i < buf.size(); ++i) {
+      uint8_t b = buf[i];
+      if (in_string) {
+        if (escaped) escaped = false;
+        else if (b == '\\') escaped = true;
+        else if (b == '"') in_string = false;
+        continue;
+      }
+      if (b == '"') in_string = true;
+      else if (b == '{') ++depth;
+      // Ignore a stray '}' with no open brace; letting depth go negative would
+      // wedge the buffer permanently.
+      else if (b == '}' && depth > 0 && --depth == 0) return i + 1;
+    }
+    return 0;
+  }
 };
 
 // ── Response chunking ───────────────────────────────────────────────
@@ -269,6 +289,35 @@ inline std::vector<std::vector<uint8_t>> chunk_response(
   return chunks;
 }
 
+// Make a user-supplied string safe to embed in a JSON response value.
+//
+// Two distinct hazards, both reachable from ordinary user input (a fan name or
+// preset name typed in HA or the OEM app, a Wi-Fi SSID):
+//   - '"' and '\' would terminate or corrupt the JSON string, so they are
+//     escaped, as are control characters.
+//   - '{' and '}' are NOT JSON-special inside a string, but the OEM app frames
+//     an incoming notification by scanning for a brace regardless of quoting,
+//     so either one truncates the message it sees. They are dropped outright;
+//     no escape exists that would help.
+inline std::string json_escape(const std::string &s) {
+  std::string out;
+  out.reserve(s.size() + 8);
+  for (unsigned char c : s) {
+    switch (c) {
+      case '"':  out += "\\\""; break;
+      case '\\': out += "\\\\"; break;
+      case '\n': out += "\\n";  break;
+      case '\r': out += "\\r";  break;
+      case '\t': out += "\\t";  break;
+      case '{': case '}': break;  // dropped — see above
+      default:
+        if (c >= 0x20) out += static_cast<char>(c);  // drop other control chars
+        break;
+    }
+  }
+  return out;
+}
+
 // Prepend "QQ" to a JSON string (V4.1+ wire format).
 inline std::vector<uint8_t> qq_wrap(const std::string &json) {
   std::vector<uint8_t> out;
@@ -276,6 +325,27 @@ inline std::vector<uint8_t> qq_wrap(const std::string &json) {
   out.push_back('Q');
   out.push_back('Q');
   out.insert(out.end(), json.begin(), json.end());
+  return out;
+}
+
+// Frame a binary (non-JSON) response the way stock does: "QQ" prefix, then the
+// request's own '{' + type-byte + payload + '}' envelope.
+//
+// The '}' terminator is mandatory. The Smart Control app accumulates notify
+// chunks and asks its receive assembler whether a message is complete; for a
+// "QQ"-prefixed buffer that check is purely `endsWith("}")`. A binary response
+// without the terminator is never dispatched — the client keeps buffering, the
+// pending command never completes, and its request queue stalls.
+inline std::vector<uint8_t> binary_frame(uint8_t type,
+                                         const std::vector<uint8_t> &payload) {
+  std::vector<uint8_t> out;
+  out.reserve(5 + payload.size());
+  out.push_back('Q');
+  out.push_back('Q');
+  out.push_back('{');
+  out.push_back(type);
+  out.insert(out.end(), payload.begin(), payload.end());
+  out.push_back('}');
   return out;
 }
 
@@ -423,12 +493,6 @@ inline bool validate_ssid(const std::string &ssid) {
 
 inline bool validate_password(const std::string &pwd) {
   return pwd.size() <= 64;
-}
-
-inline bool validate_fan_name(const std::string &name) {
-  if (name.size() > 32) return false;
-  for (char c : name) if (c == '{' || c == '}') return false;
-  return true;
 }
 
 inline bool validate_threshold(int value) {

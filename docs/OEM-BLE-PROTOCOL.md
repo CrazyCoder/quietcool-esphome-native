@@ -689,15 +689,24 @@ characteristic. The hub (and a compatible server) distinguishes them by looking 
 byte **after** the leading `{` (`0x7B`): `0x1C` (=28) or `0x1D` (=29). Anything else is
 parsed as JSON.
 
+Responses mirror the request envelope: `QQ` + `0x7B` (`'{'`) + the type byte + payload +
+`0x7D` (`'}'`). **The trailing `}` is mandatory.** A client accumulates notify chunks and
+treats a `QQ`-prefixed buffer as a complete message only once it ends with `}` — an
+unterminated binary response is buffered indefinitely, the pending request never
+completes, and the client's request queue stalls. Clients also index the payload from a
+fixed offset: the type byte is at index 3 and the first payload byte at index 4.
+
 ### GetRecordData (A=28) — 31-day hourly log
 
 The hub keeps a rolling 31-day, hourly log of temperature, humidity, and fan-relay
 state, and streams a day at a time.
 
 - **Request** (4 bytes): `0x7B 0x1C <day-index> 0x7D` = `'{' 28 <idx> '}'`.
-- **Response** (raw bytes): optional `QQ` prefix, a type marker `0x1C`, the day-index
-  echo, then up to 24 one-byte hourly samples, terminated by `0x7D` (`'}'`). The OEM
-  app renders these as a space-separated decimal string.
+- **Response** (raw bytes): `QQ 0x7B 0x1C` then the year/month/day header and 24 hourly
+  samples for each of temperature, humidity, and relay state, terminated by `0x7D`
+  (`'}'`). The OEM app renders the payload as a space-separated decimal string and
+  groups it in threes, so the payload length must be a multiple of 3 (75 bytes in
+  practice); `0xFF` is the "no data" sentinel.
 
 The samples come from the hub's hourly logger; the OEM app uses this to draw its trend
 graphs.
@@ -705,8 +714,9 @@ graphs.
 ### SynchronizeTime (A=29) — set the clock
 
 - **Request** (13 bytes): `0x7B 0x1D <10 ASCII digits of UTC epoch seconds> 0x7D`.
-- **Response** (raw bytes): `QQ`-prefixed marker `0x1D` followed by `0x01` (success) or
-  `0x00` (failure). The OEM app wraps it as `{"Api":"SynchronizeTime","Flag":"TRUE"}`.
+- **Response** (6 bytes): `QQ 0x7B 0x1D <flag> 0x7D`, where `<flag>` is `0x01` (success)
+  or `0x00` (failure). The OEM app wraps it as
+  `{"Api":"SynchronizeTime","Flag":"TRUE"}`.
 
 ---
 

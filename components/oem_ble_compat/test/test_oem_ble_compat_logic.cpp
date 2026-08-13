@@ -339,12 +339,125 @@ TEST("frame: two JSON messages in sequence") {
   REQUIRE(!fa.has_complete());
 }
 
-TEST("frame: braces inside JSON string cause premature completion (known limitation)") {
+TEST("frame: braces inside a JSON string do not end the frame") {
   FrameAssembler fa;
   std::string json = R"({"A":16,"N":"my{fan}"})";
   fa.feed(reinterpret_cast<const uint8_t *>(json.data()), json.size());
-  // The brace counter sees the } inside the string as depth=0.
-  // This is a known limitation — validate_fan_name rejects braces.
+  REQUIRE(fa.has_complete());
+  auto msg = fa.take();
+  // The whole object, not a fragment cut at the '}' inside the string.
+  REQUIRE_EQ(msg.size(), json.size());
+  REQUIRE(fa.buf.empty());
+}
+
+TEST("frame: a '}' in a password does not truncate or poison the buffer") {
+  FrameAssembler fa;
+  // SetRouter carries arbitrary user text; validate_password permits braces.
+  std::string json = R"({"A":11,"S":"net","P":"pa}ss{word"})";
+  fa.feed(reinterpret_cast<const uint8_t *>(json.data()), json.size());
+  REQUIRE(fa.has_complete());
+  REQUIRE_EQ(fa.take().size(), json.size());
+  REQUIRE(fa.buf.empty());
+  // The next command still frames cleanly.
+  std::string next = R"({"A":1})";
+  fa.feed(reinterpret_cast<const uint8_t *>(next.data()), next.size());
+  REQUIRE(fa.has_complete());
+  REQUIRE_EQ(fa.take().size(), next.size());
+}
+
+TEST("frame: escaped quote inside a JSON string is not a string terminator") {
+  FrameAssembler fa;
+  std::string json = R"({"A":16,"N":"say \"hi\" }now"})";
+  fa.feed(reinterpret_cast<const uint8_t *>(json.data()), json.size());
+  REQUIRE(fa.has_complete());
+  REQUIRE_EQ(fa.take().size(), json.size());
+}
+
+TEST("frame: stray leading '}' does not wedge the buffer") {
+  FrameAssembler fa;
+  std::string junk = "}";
+  fa.feed(reinterpret_cast<const uint8_t *>(junk.data()), junk.size());
+  REQUIRE(!fa.has_complete());
+  std::string json = R"({"A":1})";
+  fa.feed(reinterpret_cast<const uint8_t *>(json.data()), json.size());
+  REQUIRE(fa.has_complete());
+  // Leading junk rides along and the parse fails, but the buffer is drained
+  // rather than left holding an unmatchable prefix forever.
+  fa.take();
+  REQUIRE(fa.buf.empty());
+}
+
+TEST("frame: binary GetRecordData with day-index 0x7D frames as 4 bytes") {
+  FrameAssembler fa;
+  // 0x7D is '}' — scanning for a terminator would cut this one byte short.
+  uint8_t data[] = {'{', 0x1C, 0x7D, '}'};
+  fa.feed(data, 4);
+  REQUIRE(fa.has_complete());
+  auto msg = fa.take();
+  REQUIRE_EQ(msg.size(), size_t(4));
+  REQUIRE_EQ(msg[2], uint8_t(0x7D));
+  REQUIRE(fa.buf.empty());
+}
+
+TEST("frame: binary command split across writes completes only when whole") {
+  FrameAssembler fa;
+  uint8_t first[] = {'{', 0x1D, '1', '7', '4', '8'};
+  fa.feed(first, 6);
+  REQUIRE(!fa.has_complete());
+  uint8_t rest[] = {'2', '8', '0', '0', '0', '0', '}'};
+  fa.feed(rest, 7);
+  REQUIRE(fa.has_complete());
+  REQUIRE_EQ(fa.take().size(), size_t(13));
+}
+
+TEST("frame: binary command followed by a queued JSON command") {
+  FrameAssembler fa;
+  uint8_t bin[] = {'{', 0x1C, 0x05, '}'};
+  fa.feed(bin, 4);
+  std::string json = R"({"A":1})";
+  fa.feed(reinterpret_cast<const uint8_t *>(json.data()), json.size());
+  // The binary frame must not swallow the JSON that followed it.
+  REQUIRE(fa.has_complete());
+  REQUIRE_EQ(fa.take().size(), size_t(4));
+  REQUIRE(fa.has_complete());
+  REQUIRE_EQ(fa.take().size(), json.size());
+  REQUIRE(fa.buf.empty());
+}
+
+TEST("frame: buffer is capped and dropped rather than grown without bound") {
+  FrameAssembler fa;
+  std::vector<uint8_t> junk(200, 'x');  // no braces — never completes
+  size_t accepted = 0;
+  for (int i = 0; i < 20; i++) {
+    if (fa.feed(junk.data(), junk.size())) accepted++;
+    REQUIRE(fa.buf.size() <= FrameAssembler::MAX_BUFFERED);
+  }
+  REQUIRE(accepted < 20);       // at least one write was refused
+  REQUIRE(!fa.has_complete());
+}
+
+TEST("frame: a normal message still fits well under the cap") {
+  FrameAssembler fa;
+  // Worst realistic request: SetPresets with 4 fully-populated presets.
+  std::string big = R"({"A":20,"P":[)";
+  for (int i = 0; i < 4; i++) {
+    if (i) big += ',';
+    big += R"([")" + std::string(50, 'n') + R"(",120,100,80,90,70,"MEDIUM"])";
+  }
+  big += "]}";
+  REQUIRE(big.size() < FrameAssembler::MAX_BUFFERED);
+  REQUIRE(fa.feed(reinterpret_cast<const uint8_t *>(big.data()), big.size()));
+  REQUIRE(fa.has_complete());
+  REQUIRE_EQ(fa.take().size(), big.size());
+}
+
+TEST("frame: recovers on the next message after an overflow drop") {
+  FrameAssembler fa;
+  std::vector<uint8_t> junk(FrameAssembler::MAX_BUFFERED + 1, 'x');
+  REQUIRE(!fa.feed(junk.data(), junk.size()));
+  REQUIRE(fa.buf.empty());
+  std::string json = R"({"A":1})";
+  REQUIRE(fa.feed(reinterpret_cast<const uint8_t *>(json.data()), json.size()));
   REQUIRE(fa.has_complete());
 }
 
@@ -395,6 +508,65 @@ TEST("chunk: empty data produces one empty chunk") {
   REQUIRE(chunks[0].empty());
 }
 
+// ============================================================================
+// 7b. Binary response framing (A=28 GetRecordData, A=29 SynchronizeTime)
+// ============================================================================
+//
+// The OEM app's receive assembler only treats a "QQ"-prefixed buffer as a
+// complete message once it ends with '}'. A binary response missing that
+// terminator is buffered forever and the app's request queue stalls.
+
+TEST("binary frame: QQ prefix, '{' + type envelope, '}' terminator") {
+  auto f = binary_frame(0x1D, {0x01});
+  REQUIRE_EQ(f.size(), size_t(6));
+  REQUIRE_EQ(f[0], uint8_t('Q'));
+  REQUIRE_EQ(f[1], uint8_t('Q'));
+  REQUIRE_EQ(f[2], uint8_t('{'));
+  REQUIRE_EQ(f[3], uint8_t(0x1D));  // app reads the type at index 3
+  REQUIRE_EQ(f[4], uint8_t(0x01));  // SynchronizeTime success flag at index 4
+  REQUIRE_EQ(f[5], uint8_t('}'));
+}
+
+TEST("binary frame: always terminated so the app can frame it") {
+  REQUIRE_EQ(binary_frame(0x1D, {0x01}).back(), uint8_t('}'));
+  REQUIRE_EQ(binary_frame(0x1C, std::vector<uint8_t>(75, 0xFF)).back(), uint8_t('}'));
+  REQUIRE_EQ(binary_frame(0x1C, {}).back(), uint8_t('}'));
+}
+
+TEST("binary frame: GetRecordData payload survives as 75 values (25 groups of 3)") {
+  auto f = binary_frame(0x1C, std::vector<uint8_t>(75, 0xFF));
+  REQUIRE_EQ(f.size(), size_t(80));
+  REQUIRE_EQ(f[3], uint8_t(0x1C));
+  // The app emits index 4 then indices 5..size-2, and groups the result in
+  // threes; a count not divisible by 3 makes its last group short and throws.
+  size_t emitted = (f.size() - 1) - 4;
+  REQUIRE_EQ(emitted, size_t(75));
+  REQUIRE_EQ(emitted % 3, size_t(0));
+}
+
+// The app reads the type byte off the *first* notify packet
+// (dataArray[0][3]) and tests completeness on the *accumulated* buffer
+// (endsWith "}"). Chunking must not break either.
+TEST("binary frame: chunked at default MTU, type stays in chunk 0, '}' ends the last") {
+  auto f = binary_frame(0x1C, std::vector<uint8_t>(75, 0xFF));
+  auto chunks = chunk_response(f, 23);  // 20-byte chunks
+  REQUIRE_EQ(chunks.size(), size_t(4));
+  REQUIRE(chunks[0].size() > 3);
+  REQUIRE_EQ(chunks[0][3], uint8_t(0x1C));
+  REQUIRE_EQ(chunks.back().back(), uint8_t('}'));
+  // Reassembly must reproduce the frame byte-for-byte.
+  std::vector<uint8_t> rejoined;
+  for (auto &c : chunks) rejoined.insert(rejoined.end(), c.begin(), c.end());
+  REQUIRE(rejoined == f);
+}
+
+TEST("binary frame: SynchronizeTime fits one notify packet") {
+  auto chunks = chunk_response(binary_frame(0x1D, {0x01}), 23);
+  REQUIRE_EQ(chunks.size(), size_t(1));
+  REQUIRE_EQ(chunks[0][3], uint8_t(0x1D));
+  REQUIRE_EQ(chunks[0].back(), uint8_t('}'));
+}
+
 TEST("qq_wrap: prepends QQ to JSON") {
   auto wrapped = qq_wrap(R"({"A":1})");
   REQUIRE_EQ(wrapped.size(), size_t(9));
@@ -431,11 +603,37 @@ TEST("validate_password: empty → true, 64 → true, 65 → false") {
   REQUIRE(!validate_password(std::string(65, 'p')));
 }
 
-TEST("validate_fan_name: rejects braces (frame assembler safety)") {
-  REQUIRE(!validate_fan_name("my{fan}"));
-  REQUIRE(!validate_fan_name("{"));
-  REQUIRE(validate_fan_name("Normal Fan Name"));
-  REQUIRE(validate_fan_name(""));
+// Response-side safety for user text (fan/preset names, SSID). This replaced
+// validate_fan_name, which was never wired to a call site and so protected
+// nothing; escaping also covers the HA-entity and NVS-import paths a validator
+// on the BLE handler would have missed.
+TEST("json_escape: passes ordinary text through unchanged") {
+  REQUIRE_EQ(json_escape("Attic Fan 2"), std::string("Attic Fan 2"));
+  REQUIRE_EQ(json_escape(""), std::string(""));
+}
+
+TEST("json_escape: escapes quote and backslash") {
+  REQUIRE_EQ(json_escape(R"(my "big" fan)"), std::string(R"(my \"big\" fan)"));
+  REQUIRE_EQ(json_escape(R"(a\b)"), std::string(R"(a\\b)"));
+}
+
+TEST("json_escape: drops braces (OEM app frames on a brace, quoting ignored)") {
+  REQUIRE_EQ(json_escape("my{fan}"), std::string("myfan"));
+  REQUIRE_EQ(json_escape("}"), std::string(""));
+}
+
+TEST("json_escape: escapes newline/tab, drops other control characters") {
+  REQUIRE_EQ(json_escape("a\nb\tc"), std::string("a\\nb\\tc"));
+  REQUIRE_EQ(json_escape(std::string("a\x01\x1f") + "b"), std::string("ab"));
+}
+
+TEST("json_escape: an escaped name still frames as one message") {
+  // The whole point: the response must survive the app's assembler.
+  auto body = R"({"A":17,"N":")" + json_escape(R"(fan"}evil)") + R"("})";
+  FrameAssembler fa;
+  fa.feed(reinterpret_cast<const uint8_t *>(body.data()), body.size());
+  REQUIRE(fa.has_complete());
+  REQUIRE_EQ(fa.take().size(), body.size());
 }
 
 TEST("validate_threshold: 0-255 valid, -1 and 256 invalid") {

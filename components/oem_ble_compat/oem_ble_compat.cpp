@@ -467,7 +467,11 @@ void OemBleCompat::stop_service_() {
 
 void OemBleCompat::on_ble_write_(const std::vector<uint8_t> &data) {
   ESP_LOGD(TAG, "BLE write received: %u bytes", (unsigned) data.size());
-  framer_.feed(data.data(), data.size());
+  if (!framer_.feed(data.data(), data.size())) {
+    ESP_LOGW(TAG, "BLE frame exceeded %u bytes without completing — buffer dropped",
+             (unsigned) ::qc::FrameAssembler::MAX_BUFFERED);
+    return;
+  }
   while (framer_.has_complete()) {
     auto msg = framer_.take();
     if (!msg.empty()) process_message_(msg);
@@ -827,7 +831,8 @@ std::string OemBleCompat::handle_get_parameter_() {
   snprintf(buf, sizeof(buf),
            R"({"A":2,"B":"%s","C":"%s","D":%d,"E":%d,"F":%d,"G":%d,"H":%d,"I":"%s","J":%d,"K":%d,"L":"%s","M":"%s"})",
            mode, fan_type, temp_h, temp_m, temp_l, hum_h, hum_l, hum_range,
-           timer_hours, timer_minutes, time_range, fan_info_.guide_setup);
+           timer_hours, timer_minutes, time_range,
+           ::qc::json_escape(fan_info_.guide_setup).c_str());
   return buf;
 }
 
@@ -853,9 +858,9 @@ std::string OemBleCompat::handle_get_router_() {
   if (mac)
     format_mac_addr_upper(mac, mac_str);
 
-  char buf[128];
-  snprintf(buf, sizeof(buf), R"({"A":4,"S":"%s","P":"","M":"%s"})", ssid, mac_str);
-  return buf;
+  // An SSID is arbitrary user text and can carry quotes or braces.
+  return R"({"A":4,"S":")" + ::qc::json_escape(ssid) +
+         R"(","P":"","M":")" + std::string(mac_str) + R"("})";
 }
 
 // A=5 GetUpgradeState — minimal flash feedback (see handle_upgrade_).
@@ -914,7 +919,10 @@ std::string OemBleCompat::handle_set_time_(cJSON *root) {
   auto speed_str = json_str_field(root, "R", "SetTime_Range");
 
   if (hours >= 0 && minutes >= 0 && fan_) {
-    int total_min = hours * 60 + minutes;
+    // Widen before multiplying and clamp to a day: the fields come straight off
+    // the wire, and hours * 60 overflows a 32-bit int for large values.
+    int64_t wide = static_cast<int64_t>(hours) * 60 + minutes;
+    int total_min = static_cast<int>(std::min<int64_t>(wide, 1440));
     std::string spd = speed_str.empty() ? "low" : speed_str;
     // Arm the timer at the chosen speed + duration.
     fan_->set_runtime(spd, total_min);
@@ -1106,12 +1114,12 @@ std::string OemBleCompat::handle_set_fan_info_(cJSON *root) {
 }
 
 // A=17 GetFanInfo — app reads N/M/S only (GuideSetup comes from GetParameter M key).
+// Built with std::string, not a fixed buffer: escaping can double a field's
+// length, and a truncated response would be unframeable by the app.
 std::string OemBleCompat::handle_get_fan_info_() {
-  char buf[128];
-  snprintf(buf, sizeof(buf),
-           R"({"A":17,"N":"%s","M":"%s","S":"%s"})",
-           fan_info_.name, fan_info_.model, fan_info_.serial);
-  return buf;
+  return R"({"A":17,"N":")" + ::qc::json_escape(fan_info_.name) +
+         R"(","M":")" + ::qc::json_escape(fan_info_.model) +
+         R"(","S":")" + ::qc::json_escape(fan_info_.serial) + R"("})";
 }
 
 // A=18 SetSpeed
@@ -1132,9 +1140,14 @@ std::string OemBleCompat::handle_set_speed_(cJSON *root) {
       call.perform();
     }
   }
-  // App's receiveSetSpeed expects S (acknowledged speed) + F (flag).
+  // App's receiveSetSpeed expects S (acknowledged speed) + F (flag). Echo the
+  // canonical speed we actually applied rather than the client's raw string:
+  // for every legitimate input the two are identical, and echoing raw text
+  // would let an overlong or quote-bearing value truncate this response into
+  // something the app can neither frame nor parse.
   char buf[48];
-  snprintf(buf, sizeof(buf), R"({"A":18,"S":"%s","F":"TRUE"})", speed_str.c_str());
+  snprintf(buf, sizeof(buf), R"({"A":18,"S":"%s","F":"TRUE"})",
+           ::qc::speed_to_oem(spd));
   return buf;
 }
 
@@ -1148,13 +1161,15 @@ std::string OemBleCompat::handle_get_presets_() {
   for (int i = 0; i < presets_.count && i < 4; i++) {
     if (i > 0) buf += ',';
     auto &p = presets_.presets[i];
-    char entry[128];
-    snprintf(entry, sizeof(entry),
-             R"(["%s",%d,%d,%d,%d,%d,"%s"])",
-             p.name, p.values[1], p.values[2], p.values[3],
-             p.values[4], p.values[5],
+    // Only the numeric part goes through a fixed buffer; the escaped name is
+    // appended directly, since escaping can outgrow any size chosen here.
+    char nums[64];
+    snprintf(nums, sizeof(nums), R"(",%d,%d,%d,%d,%d,"%s"])",
+             p.values[1], p.values[2], p.values[3], p.values[4], p.values[5],
              ::qc::speed_to_oem(p.values[0]));
-    buf += entry;
+    buf += R"([")";
+    buf += ::qc::json_escape(p.name);
+    buf += nums;
   }
   buf += "]}";
   return buf;
@@ -1231,29 +1246,17 @@ std::string OemBleCompat::handle_reset_() {
 void OemBleCompat::handle_binary_get_record_data_(const std::vector<uint8_t> &msg) {
   uint8_t day_idx = (msg.size() >= 3) ? msg[2] : 0;
   ESP_LOGD(TAG, "GetRecordData day=%d (stub — zeroed hourly data)", day_idx);
-  // QQ + unused + 0x1C + 75 data bytes + '}'
-  // Data: year(0) + month(0) + day(day_idx) + 72 zeros (24h × temp+hum+speed)
-  std::vector<uint8_t> resp;
-  resp.reserve(80);
-  resp.push_back('Q');
-  resp.push_back('Q');
-  resp.push_back(0x00);
-  resp.push_back(0x1C);
-  resp.push_back(0xFF);        // year = -1 (no data sentinel)
-  resp.push_back(0xFF);        // month = -1
-  resp.push_back(0xFF);        // day = -1
-  for (int i = 0; i < 72; i++)
-    resp.push_back(0xFF);     // 24h × 3 metrics = -1 (no data)
-  resp.push_back('}');
-  send_raw_response_(resp);
+  // 75 data bytes: year + month + day + 72 (24h × temp+hum+speed), all the
+  // 0xFF "no data" sentinel.
+  std::vector<uint8_t> payload(75, 0xFF);
+  send_raw_response_(::qc::binary_frame(0x1C, payload));
 }
 
 // A=29 SynchronizeTime — stub (ESPHome uses SNTP).
 void OemBleCompat::handle_binary_sync_time_(const std::vector<uint8_t> &msg) {
   ESP_LOGD(TAG, "SynchronizeTime (stub, using SNTP)");
   (void) msg;
-  std::vector<uint8_t> resp = {'Q', 'Q', 0x00, 0x1D, 0x01};  // success
-  send_raw_response_(resp);
+  send_raw_response_(::qc::binary_frame(0x1D, {0x01}));  // 0x01 = success
 }
 
 // ── One-shot OEM NVS import (first boot only — pref load failure is the marker) ──
@@ -1510,6 +1513,11 @@ void OemBleCompat::on_threshold_changed() {
 // Anything else is treated as an empty/uninitialised store.
 static constexpr uint8_t PAIR_FLAG_SENTINEL = 0x41;
 
+// Hard ceiling on Phone<N> slots in the OEM hx_list namespace. The scan/append/
+// clear helpers below all bound themselves by this, so the configured
+// max_pair_ids can never exceed it (the YAML schema caps it to the same value).
+static constexpr int MAX_PAIR_SLOTS = 50;
+
 // Opens hx_list RO iff the OEM pair-flag sentinel is present, and reads
 // pair_num. Returns true with the handle live; false (handle closed, *num=0)
 // when the namespace is missing or the sentinel byte doesn't match.
@@ -1542,7 +1550,7 @@ bool OemBleCompat::nvs_has_pair_id_(const std::string &id) {
   // read so we don't churn the heap inside this scan loop (up to 50 entries).
   char val[101];
   bool found = false;
-  for (int i = 1; i <= num && i <= 50; i++) {
+  for (int i = 1; i <= num && i <= MAX_PAIR_SLOTS; i++) {
     char key[10];
     snprintf(key, sizeof(key), "Phone%d", i);
     size_t len = sizeof(val);
@@ -1569,7 +1577,7 @@ bool OemBleCompat::nvs_add_pair_id_(const std::string &id) {
   uint8_t num = 0;
   if (flag == PAIR_FLAG_SENTINEL)
     nvs_get_u8(h, "pair_num", &num);
-  if (num >= 50) { nvs_close(h); return false; }
+  if (num >= MAX_PAIR_SLOTS) { nvs_close(h); return false; }
 
   num++;
   char key[10];
@@ -1591,7 +1599,7 @@ void OemBleCompat::nvs_clear_pairs_() {
 
   uint8_t num = 0;
   nvs_get_u8(h, "pair_num", &num);
-  for (int i = 1; i <= num && i <= 50; i++) {
+  for (int i = 1; i <= num && i <= MAX_PAIR_SLOTS; i++) {
     char key[10];
     snprintf(key, sizeof(key), "Phone%d", i);
     nvs_erase_key(h, key);

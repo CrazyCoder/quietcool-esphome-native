@@ -64,7 +64,10 @@ CONFIG_SCHEMA = cv.Schema(
         # and resumes when Improv goes idle.
         cv.Optional(CONF_IMPROV_ID): cv.use_id(ESP32ImprovComponent),
         cv.Optional(CONF_PAIR_MODE_TIMEOUT, default=120): cv.positive_int,
-        cv.Optional(CONF_MAX_PAIR_IDS, default=50): cv.positive_int,
+        # 50 is a hard ceiling, not a preference: the OEM hx_list namespace only
+        # has Phone1..Phone50 slots and MAX_PAIR_SLOTS in the .cpp bounds every
+        # scan/append against it. A larger value here would silently do nothing.
+        cv.Optional(CONF_MAX_PAIR_IDS, default=50): cv.int_range(min=1, max=50),
         cv.Optional(CONF_TEMP_SENSOR): cv.use_id(sensor.Sensor),
         cv.Optional(CONF_HUMIDITY_SENSOR): cv.use_id(sensor.Sensor),
         cv.Optional(CONF_SMART_TEMP_HIGH): cv.use_id(number.Number),
