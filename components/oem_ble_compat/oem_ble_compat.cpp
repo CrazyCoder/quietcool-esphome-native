@@ -456,6 +456,15 @@ void OemBleCompat::apply_oem_raw_adv_() {
   // .parseFromBytes stops there and the scan response is parsed from the same
   // concatenated buffer, which would erase the device name and trip
   // condition 1.
+  //
+  // Exact layout, because it is one byte off from the obvious reading: the
+  // payload occupies record bytes 5..30, so the label is 6..30 while the app's
+  // window is 6..31. Byte 31 is the FIRST BYTE OF THE SCAN RESPONSE, which is
+  // its AD length (1 + 21 = 0x16). That lands inside the window and only
+  // disappears because trim() strips anything <= 0x20. Anything that puts a
+  // printable byte at record offset 31 — a longer GAP name, or another AD
+  // placed ahead of the name in the scan response — leaks one character into
+  // the device-list row. Same trap the ADV TX power byte used to carry.
   const uint8_t *mac = esp_bt_dev_get_address();
   if (mac == nullptr)
     return;
@@ -833,7 +842,12 @@ void OemBleCompat::set_fan_model_by_display(const std::string &display_name) {
   if (!fan_info_loaded_ || syncing_fan_info_) return;
   copy_bounded_(fan_info_.model, ::qc::fan_model_index(display_name.c_str()));
   copy_bounded_(fan_info_.name, display_name.c_str());
+  // Guarded like the BLE→HA push in handle_set_fan_info_: the Fan Name text has
+  // an on_value that calls set_fan_name, so an unguarded publish re-enters and
+  // repeats the preference write and the advertisement rebuild below.
+  syncing_fan_info_ = true;
   if (fan_name_text_) fan_name_text_->publish_state(fan_info_.name);
+  syncing_fan_info_ = false;
   fan_info_pref_.save(&fan_info_);
   mark_hx_dirty();
   // The advertisement carries the model digit the app reads for the fan photo,
