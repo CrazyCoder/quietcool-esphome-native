@@ -398,14 +398,15 @@ void OemBleCompat::start_service_() {
   }
 }
 
-// The model changes at runtime from the HA select and from OEM SetFanInfo, and
-// it is carried in the advertisement, so rebuild the packet instead of waiting
-// for a reboot.
+// The name and model change at runtime from the HA entities and from OEM
+// SetFanInfo, and both are carried in the advertisement, so rebuild the packet
+// instead of waiting for a reboot.
 void OemBleCompat::refresh_adv_name_() {
   if (!service_started_)
     return;
   apply_oem_raw_adv_();
-  ESP_LOGI(TAG, "OEM BLE advertisement rebuilt, model '%c'", fan_info_.model[0]);
+  ESP_LOGI(TAG, "OEM BLE advertisement rebuilt, model '%c', name '%s'", fan_info_.model[0],
+           fan_info_.name);
 }
 
 void OemBleCompat::apply_oem_raw_adv_() {
@@ -414,22 +415,14 @@ void OemBleCompat::apply_oem_raw_adv_() {
   //   name = recordStr.substring(6, 32); model = recordStr.substring(5, 6);
   //   if (model.equals("A")) name = "A" + name;  txt.setText(name.trim());
   //
-  // The leak is ALWAYS in the scan response: ESPHome duplicates the device name
-  // there, so the 2nd copy lands inside substring(6,32) and the app renders
-  // "ATTICFAN_<mac> ATTI". Earlier we overwrote the scan response with raw bytes
-  // AFTER ESPHome configured it, but ESPHome reconfigures (leaky) + restarts on
-  // every connection teardown, leaving a brief window where the leaked name went
-  // out before our override landed.
-  //
-  // Structural fix: disable ESPHome's structured scan response entirely
-  // (set_scan_response(false)). Then services_advertisement_() only ever
-  // configures the ADV packet — which carries the name exactly ONCE (bytes
-  // 5..25, with byte 5 = 'A' = the app's "model") plus TX power — and never
-  // touches the scan response again. We supply a static raw scan response of
-  // all-trimmable padding so the combined record reaches >= 32 bytes (the app's
-  // substring(6,32) throws on a shorter one) while bytes 26..31 stay <= 0x20 and
-  // get trimmed away -> clean "ATTICFAN_<mac>". No name-bearing scan response is
-  // ever emitted, so there is no window.
+  // ESPHome's own scan response duplicates the device name, which puts a second
+  // copy inside substring(6,32) and makes the app render "ATTICFAN_<mac> ATTI".
+  // It also reconfigures and restarts advertising on every connection teardown,
+  // so overwriting the scan response afterwards leaves a window where the leaky
+  // packet goes out. Disabling ESPHome's structured scan response entirely
+  // (set_scan_response(false)) removes the code path rather than racing it:
+  // services_advertisement_() then only configures the ADV packet, and both raw
+  // payloads below are ours alone.
   esp32_ble::BLEAdvertising *adv = oem_ble_advertising();
   if (adv != nullptr)
     adv->set_scan_response(false);
@@ -446,61 +439,82 @@ void OemBleCompat::apply_oem_raw_adv_() {
   //      only "1".."7" to a fan photo.
   //
   // So the digit comes from a manufacturer AD placed right after flags, whose
-  // payload is <digit>ATTICFAN_<mac>: byte 5 is the digit and bytes 6..26 are
-  // the name text the adapter reads. The real name AD moves to the scan
-  // response, which still feeds getDeviceName(). This mirrors the OEM firmware,
-  // whose log prints exactly that concatenation as "test_manufacturer".
+  // payload is <digit><fan name>: byte 5 is the digit and bytes 6..30 are the
+  // label the adapter shows in the device list. The real name AD moves to the
+  // scan response, which still feeds getDeviceName(). This is what the OEM
+  // firmware builds too — it concatenates its model and name globals into a
+  // 26-byte buffer and logs the result as "test_manufacturer", and its
+  // esp_ble_adv_data_t carries that buffer with manufacturer_len 26.
   //
-  // No zero padding anywhere before the name AD: ScanRecord.parseFromBytes
-  // stops at a 0x00 length byte, and the scan response is parsed from the same
-  // concatenated buffer, so a pad byte here would erase the device name and
-  // trip condition 1. TX power fills the tail instead, and being <= 0x20 it
-  // trims out of the adapter's substring like the padding did.
+  // The payload is a FIXED 26 bytes, NUL padded, exactly as stock sizes it.
+  // Sizing it to the name instead would leave the tail of substring(6,32)
+  // reading into whatever follows — the raw scan-response name AD — and trim()
+  // only strips the ends, so a short name would render as
+  // "<name>...ATTICFAN_<mac>". The padding is safe because it sits inside a
+  // length-prefixed AD: parsing skips the whole structure. A 0x00 where a
+  // LENGTH byte is expected is the thing to avoid, since ScanRecord
+  // .parseFromBytes stops there and the scan response is parsed from the same
+  // concatenated buffer, which would erase the device name and trip
+  // condition 1.
   const uint8_t *mac = esp_bt_dev_get_address();
   if (mac == nullptr)
     return;
   char mac_lower[MAC_ADDRESS_BUFFER_SIZE];
   format_mac_addr_lower_no_sep(mac, mac_lower);
-  const char m = fan_info_.model[0];
-  const char digit = (m >= '0' && m <= '7') ? m : '0';
 
-  char tagged[OEM_TAGGED_NAME_BUFFER_SIZE];  // "<digit>ATTICFAN_<mac>"
-  const int tagged_len =
-      snprintf(tagged, sizeof(tagged), "%cATTICFAN_%s", digit, mac_lower);
-  if (tagged_len < 2 || tagged_len >= (int) sizeof(tagged))
+  char ble_name[OEM_BLE_NAME_BUFFER_SIZE];  // "ATTICFAN_<mac>"
+  const int name_len = snprintf(ble_name, sizeof(ble_name), "ATTICFAN_%s", mac_lower);
+  if (name_len < 1 || name_len >= (int) sizeof(ble_name))
     return;
 
-  uint8_t advraw[31];
+  const char m = fan_info_.model[0];
+  const char digit = (m >= '0' && m <= '7') ? m : '0';
+  // Fan info with no name would leave the device-list row blank, so fall back
+  // to the BLE name.
+  const char *label = fan_info_.name[0] != '\0' ? fan_info_.name : ble_name;
+  const size_t label_room = OEM_ADV_MFG_PAYLOAD_LEN - 1;
+  size_t label_len = strlen(label);
+  if (label_len > label_room)
+    label_len = label_room;
+
+  uint8_t advraw[3 + 2 + OEM_ADV_MFG_PAYLOAD_LEN];
   size_t n = 0;
   advraw[n++] = 0x02;
   advraw[n++] = ESP_BLE_AD_TYPE_FLAG;
   advraw[n++] = 0x06;
-  advraw[n++] = (uint8_t) (1 + tagged_len);
+  advraw[n++] = (uint8_t) (1 + OEM_ADV_MFG_PAYLOAD_LEN);
   advraw[n++] = ESP_BLE_AD_MANUFACTURER_SPECIFIC_TYPE;
-  memcpy(advraw + n, tagged, tagged_len);
-  n += tagged_len;
-  advraw[n++] = 0x02;
-  advraw[n++] = ESP_BLE_AD_TYPE_TX_PWR;
-  advraw[n++] = 0x09;
+  advraw[n++] = (uint8_t) digit;
+  memcpy(advraw + n, label, label_len);
+  memset(advraw + n + label_len, 0, label_room - label_len);
+  n += label_room;
   esp_ble_gap_config_adv_data_raw(advraw, n);
 
   // Name only, no trailing pad, so AD parsing walks cleanly off the end.
-  uint8_t scanrsp[2 + OEM_TAGGED_NAME_BUFFER_SIZE];
+  uint8_t scanrsp[2 + OEM_BLE_NAME_BUFFER_SIZE];
   size_t s = 0;
-  scanrsp[s++] = (uint8_t) tagged_len;  // type byte + the name without the digit
+  scanrsp[s++] = (uint8_t) (1 + name_len);  // type byte + the name
   scanrsp[s++] = ESP_BLE_AD_TYPE_NAME_CMPL;
-  memcpy(scanrsp + s, tagged + 1, tagged_len - 1);
-  s += tagged_len - 1;
+  memcpy(scanrsp + s, ble_name, name_len);
+  s += name_len;
   esp_ble_gap_config_scan_rsp_data_raw(scanrsp, s);
 }
 
 void OemBleCompat::gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param) {
-  // Re-assert scan_response_=false + our padding scan response on every
-  // advertising (re)start. With scan_response_=false ESPHome never reconfigures
-  // the scan response, but a full BLE disable/enable (e.g. an Improv handoff)
-  // clears the controller's scan-response data, so re-applying here keeps the
-  // record >= 32 bytes. Guarded by service_started_ so we never touch Improv's
-  // own advertisement (Improv advertises while OEM BLE is stopped).
+  // Re-assert our raw payloads on every advertising (re)start: ESPHome rebuilds
+  // its structured advertisement on connection teardown, and a full BLE
+  // disable/enable (Improv handoff) clears the controller's data outright.
+  // Guarded by service_started_ so we never touch Improv's own advertisement
+  // (Improv advertises while OEM BLE is stopped).
+  //
+  // This still leaves a brief window right after a teardown where ESPHome's own
+  // packet is on air: BLEAdvertising::start() calls esp_ble_gap_config_adv_data
+  // and esp_ble_gap_start_advertising back to back, so advertising begins before
+  // any GAP event we can hook. In that window byte 5 is the 'A' of ATTICFAN, so
+  // a scan landing there reads the generic photo until the next report. Closing
+  // it needs ESPHome's structured path gone, not raced: bluedroid emits AD
+  // structures in a fixed order (flags, appearance, name, manufacturer, TX
+  // power), so a structured packet can never carry the model byte at offset 5.
   if (event == ESP_GAP_BLE_ADV_START_COMPLETE_EVT && service_started_) {
     apply_oem_raw_adv_();
   }
@@ -808,6 +822,8 @@ void OemBleCompat::set_fan_name(const std::string &name) {
   copy_bounded_(fan_info_.name, name.c_str());
   fan_info_pref_.save(&fan_info_);
   mark_hx_dirty();
+  // The advertisement carries the name the app shows in its device list.
+  refresh_adv_name_();
 }
 
 // Setting the model from a display name mirrors the name (OEM "model name ==
@@ -820,7 +836,8 @@ void OemBleCompat::set_fan_model_by_display(const std::string &display_name) {
   if (fan_name_text_) fan_name_text_->publish_state(fan_info_.name);
   fan_info_pref_.save(&fan_info_);
   mark_hx_dirty();
-  // The advertisement carries the model digit the app reads for the fan photo.
+  // The advertisement carries the model digit the app reads for the fan photo,
+  // and this also renames the fan.
   refresh_adv_name_();
 }
 

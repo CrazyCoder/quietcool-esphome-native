@@ -118,16 +118,20 @@ class OemBleCompat : public Component {
   void setup_ble_service_();
   void start_service_();
   void stop_service_();
-  // Disable ESPHome's structured (name-duplicating) scan response and install a
-  // static all-trimmable padding scan response, so the OEM app's substring(6,32)
-  // name parse stays clean and no name-bearing scan response is ever emitted.
+  // Write both raw payloads: an ADV of flags + a manufacturer AD carrying the
+  // model digit and fan name, and a scan response holding the GAP name alone.
+  // Also disables ESPHome's structured (name-duplicating) scan response.
   // Idempotent; called on service start and re-asserted via gap_event_handler on
   // every advertising restart (covers BLE disable/enable).
-  // "<model digit>ATTICFAN_<mac>" + NUL. The digit leads the manufacturer AD so
-  // it lands on record byte 5, which is where the OEM app reads the fan model.
-  static constexpr size_t OEM_TAGGED_NAME_BUFFER_SIZE = 23;
+  // "ATTICFAN_<mac>" + NUL, the GAP name that carries the app's scan filter.
+  static constexpr size_t OEM_BLE_NAME_BUFFER_SIZE = 22;
+  // Manufacturer AD payload: model digit + 25 fan-name bytes, NUL padded to a
+  // fixed length. Byte 5 of the record is the digit and bytes 6..31 are the
+  // label, which is exactly the window the OEM app slices.
+  static constexpr size_t OEM_ADV_MFG_PAYLOAD_LEN = 26;
   void apply_oem_raw_adv_();
-  // Rebuild the advertisement after the model changes (HA select, SetFanInfo).
+  // Rebuild the advertisement after the name or model changes (HA entities,
+  // SetFanInfo).
   void refresh_adv_name_();
 
   // ── BLE write handler + response ──
