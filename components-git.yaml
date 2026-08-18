@@ -8,16 +8,13 @@
 # into the generated per-device configuration. If you pin your package line to a
 # release tag, set the same tag in your device's `substitutions:` so the C++ and
 # the YAML come from one commit.
+#
+# Neither this file nor components-local.yaml names the components, so the two
+# sources cannot drift apart: a component missing from only one of them would
+# break just the path that file serves.
 
 external_components:
   - source:
       type: git
       url: https://github.com/CrazyCoder/quietcool-esphome-native
       ref: ${components_ref}
-    components:
-      - fan_controller
-      - http_flash_handler
-      - led_state_machine
-      - oem_ble_compat
-      - oem_nvs_reader
-      - oem_partitions

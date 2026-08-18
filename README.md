@@ -473,10 +473,12 @@ Nothing has to be copied into `/config/esphome`: the C++ components and the OEM 
 
 ```yaml
 substitutions:
-  components_ref: qc-esphome-1.2.3
+  components_ref: qc-esphome-X.Y.Z
 packages:
-  CrazyCoder.quietcool-atticfan: github://CrazyCoder/quietcool-esphome-native/quietcool-atticfan.yaml@qc-esphome-1.2.3
+  CrazyCoder.quietcool-atticfan: github://CrazyCoder/quietcool-esphome-native/quietcool-atticfan.yaml@qc-esphome-X.Y.Z
 ```
+
+Pin only to a tag that carries `components_ref`. Earlier releases expect `components/` to sit in your configuration directory and will not compile as a package.
 
 If you do not run Home Assistant, the device and its managed updater also work from the built-in web UI on a trusted LAN. You can instead build an image with your own credentials via Path B.
 

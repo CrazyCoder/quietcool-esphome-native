@@ -3,15 +3,12 @@
 # `components/` sits next to the YAML. The public configuration defaults to
 # components-git.yaml instead, because an adopted install resolves this path
 # against the user's configuration directory.
+#
+# The two files must offer the same components, so neither names them: this
+# directory holds exactly the project's own components, and ESPHome's default
+# is to take all of them.
 
 external_components:
   - source:
       type: local
       path: components
-    components:
-      - fan_controller
-      - http_flash_handler
-      - led_state_machine
-      - oem_ble_compat
-      - oem_nvs_reader
-      - oem_partitions

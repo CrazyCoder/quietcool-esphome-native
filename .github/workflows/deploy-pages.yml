@@ -41,6 +41,8 @@ jobs:
       # Capture this before ESPHome imports local components: Python may create
       # __pycache__ files under components/ during the build, and those generated
       # files must not make an unchanged source tree look like new firmware.
+      # components-git.yaml is deliberately absent: it selects the component
+      # source for adopted builds only and cannot change these bytes.
       - name: Fingerprint firmware inputs
         id: firmware-inputs
         shell: bash
