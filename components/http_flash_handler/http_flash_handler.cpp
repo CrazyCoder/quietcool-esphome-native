@@ -514,6 +514,12 @@ void HttpFlashHandler::setup() {
   // Listen for OTA completion so request_stock_restore_finalize() can mark a
   // known foreign-firmware slot valid before the reboot (see on_ota_state).
   ota_->add_state_listener(this);
+  // add_handler() is the auth-applying registration: when web_server declares
+  // an auth: block it wraps the handler in AuthMiddlewareHandler, which gates
+  // handleRequest, handleUpload and handleBody alike. Never switch these to
+  // add_handler_without_auth() — that variant exists to bypass the check, and
+  // these two endpoints can flash the device. Host tests cannot reach this
+  // wiring, so this comment is the only guard.
   web_server_base::global_web_server_base->add_handler(new FlashUrlHandler(this));
   web_server_base::global_web_server_base->add_handler(new StockFileUploadHandler(this));
   ESP_LOGCONFIG(TAG, "Registered POST /api/flash_url and POST /api/restore_stock_file");
