@@ -478,7 +478,7 @@ packages:
   CrazyCoder.quietcool-atticfan: github://CrazyCoder/quietcool-esphome-native/quietcool-atticfan.yaml@qc-esphome-X.Y.Z
 ```
 
-Pin only to a tag that carries `components_ref`. Earlier releases expect `components/` to sit in your configuration directory and will not compile as a package.
+Pinning works only with a release whose `quietcool-atticfan.yaml` defines `components_ref`; earlier tags expect `components/` to sit in your configuration directory and will not compile as a package. `main` is the default and needs no pinning.
 
 If you do not run Home Assistant, the device and its managed updater also work from the built-in web UI on a trusted LAN. You can instead build an image with your own credentials via Path B.
 
