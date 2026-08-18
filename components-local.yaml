@@ -1,0 +1,17 @@
+# Local component source, selected by `components_source: local`. Used by the
+# developer and factory wrappers, which compile from a checkout where
+# `components/` sits next to the YAML. The public configuration defaults to
+# components-git.yaml instead, because an adopted install resolves this path
+# against the user's configuration directory.
+
+external_components:
+  - source:
+      type: local
+      path: components
+    components:
+      - fan_controller
+      - http_flash_handler
+      - led_state_machine
+      - oem_ble_compat
+      - oem_nvs_reader
+      - oem_partitions

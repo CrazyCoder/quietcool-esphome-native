@@ -469,6 +469,15 @@ managed update paths above.
 
 **Take Control is for users who want to customize or locally compile the firmware.** Device Builder creates a small per-device configuration which references this repository and can add a unique API encryption key. From then on, compile and install updates from Device Builder. The adopted configuration deliberately omits the generic GitHub binary updater because installing that credential-free image would discard the adopted build's personalized API key.
 
+Nothing has to be copied into `/config/esphome`: the C++ components and the OEM partition table travel with the imported package. Both the package line Device Builder writes and the component source follow this repository's `main`. To pin a device to a release instead, change the package URL's `@main` to a release tag and add the matching `components_ref` so the YAML and the C++ come from one commit:
+
+```yaml
+substitutions:
+  components_ref: qc-esphome-1.2.3
+packages:
+  CrazyCoder.quietcool-atticfan: github://CrazyCoder/quietcool-esphome-native/quietcool-atticfan.yaml@qc-esphome-1.2.3
+```
+
 If you do not run Home Assistant, the device and its managed updater also work from the built-in web UI on a trusted LAN. You can instead build an image with your own credentials via Path B.
 
 ### Path B: build from source (developer, any OS)
@@ -526,7 +535,7 @@ A hub already running this firmware can be re-flashed **over BLE**, using the OE
 - **OEM domains are blocked.** URLs on `myquietcool.com`/`quietcool.com` no-op (ack success, flash nothing) so the stock app can't revert you to stock this way. Any other `http(s)` URL flashes.
 - **Progress.** `GetUpgradeState` (A=5) returns `Downloading_Progress` once accepted and `Download_Fail` if the download fails; on success the hub reboots (BLE drops, then the device reappears).
 - **Host a `.md5` companion.** `ota.http_request` requires a checksum (there's no skip-check), and the BLE `Upgrade` command is kept OEM-identical (URL only) — so the hub fetches the checksum from **`<url>.md5`**. Serve `firmware.ota.bin` *and* `firmware.ota.bin.md5` (32 hex chars) side by side. Generate it with `md5sum firmware.ota.bin` (Linux), `md5 -q firmware.ota.bin` (macOS), or `(Get-FileHash -Algorithm MD5 firmware.ota.bin).Hash.ToLower()` (PowerShell).
-- The bin must be built for this project's [`partitions.csv`](partitions.csv) layout — same constraint as the HTTP-flash paths.
+- The bin must be built for this project's [`partitions.csv`](components/oem_partitions/partitions.csv) layout — same constraint as the HTTP-flash paths.
 
 This complements the HTTP endpoint (`POST /api/flash_url`) and ESPHome OTA: it's the BLE-triggered equivalent.
 
@@ -543,7 +552,8 @@ This complements the HTTP endpoint (`POST /api/flash_url`) and ESPHome OTA: it's
   wifi-dist.yaml                # dist — no Wi-Fi creds; OEM-NVS auto-import
   creds-dev.yaml                # dev — api_encryption_key + ota_password from secrets
   creds-dist.yaml               # shared/adopted base — no API or OTA secret
-  partitions.csv                # OEM-compatible: nvs@0x9000, ota_0@0x20000, ota_1@0x200000
+  components-git.yaml           # adopted builds — components fetched from this repo
+  components-local.yaml         # dev/factory builds — components from the working tree
   secrets.yaml.example          # template (real secrets.yaml is gitignored)
   flash.bat                     # compile + OTA upload, one shot (Windows sugar — `esphome run` does the same anywhere)
   LICENSE                       # GPL-3.0
@@ -555,9 +565,10 @@ This complements the HTTP endpoint (`POST /api/flash_url`) and ESPHome OTA: it's
     oem_nvs_reader/             # auto-import of OEM Wi-Fi creds at boot (dist build)
     oem_ble_compat/             # full OEM BLE protocol for the stock Smart Control app (see docs/OEM-BLE-PROTOCOL.md)
     http_flash_handler/         # URL flash + version-neutral local OEM restore
+    oem_partitions/             # partitions.csv (nvs@0x9000, ota_0@0x20000, ota_1@0x200000) + its installer
 ```
 
-Each custom component has a `test/` subdirectory with host-side unit tests (run via `run_tests.bat` on Windows or `g++ -std=c++17 -I..` directly elsewhere; the batch runner auto-detects MSYS2 mingw64 in `C:\msys64` or `C:\tools\msys64`, honors a pre-set `MINGW` env var, and otherwise falls back to `g++` on `PATH`). Tests cover the fan/timer/restore/Smart Mode decision tree, dual-button gesture tracker, LED state machine, URL-flash validation, streaming local-stock image inspection, OEM-NVS import decision tree, and OEM BLE compatibility protocol (gate checks, field mapping, frame assembly, fan model catalogue, input validation).
+Each C++ component has a `test/` subdirectory with host-side unit tests (run via `run_tests.bat` on Windows or `g++ -std=c++17 -I..` directly elsewhere; the batch runner auto-detects MSYS2 mingw64 in `C:\msys64` or `C:\tools\msys64`, honors a pre-set `MINGW` env var, and otherwise falls back to `g++` on `PATH`). Tests cover the fan/timer/restore/Smart Mode decision tree, dual-button gesture tracker, LED state machine, URL-flash validation, streaming local-stock image inspection, OEM-NVS import decision tree, and OEM BLE compatibility protocol (gate checks, field mapping, frame assembly, fan model catalogue, input validation).
 
 ---
 
@@ -575,7 +586,7 @@ Choose the path that matches what is still reachable:
 
 > **MD5 of the stock bin**: `36d2e90dcfdd553272fc4eebdc3c4444`. If the URL ever serves a different bin, the OTA will abort before writing — by design.
 
-> **Partition-layout requirement.** OTA writes to whichever slot ESP-IDF picks as the next target (typically the inactive one). Both `ota_0` and `ota_1` are 1.875 MB at the OEM addresses (`0x20000` and `0x200000`). OEM application bins fit by definition. This project's own firmware fits because [`partitions.csv`](partitions.csv) mirrors the OEM layout. Other ESPHome or third-party builds must ship the equivalent partition layout and should use a normal rollback-protected OTA path, not the explicit OEM-file restore.
+> **Partition-layout requirement.** OTA writes to whichever slot ESP-IDF picks as the next target (typically the inactive one). Both `ota_0` and `ota_1` are 1.875 MB at the OEM addresses (`0x20000` and `0x200000`). OEM application bins fit by definition. This project's own firmware fits because [`partitions.csv`](components/oem_partitions/partitions.csv) mirrors the OEM layout. Other ESPHome or third-party builds must ship the equivalent partition layout and should use a normal rollback-protected OTA path, not the explicit OEM-file restore.
 
 ---
 

@@ -38,12 +38,22 @@ esphome:
 # development uses quietcool-atticfan.dev.yaml, which overrides this selector
 # and pulls the real credentials from secrets.yaml. GitHub releases use the
 # separate quietcool-atticfan.factory.yaml wrapper, which adds managed updates.
+#
+# `components_source` selects where the custom C++ components come from. It
+# defaults to `git` because this file is consumed as a remote package after
+# Take Control, where a config-relative `components/` path would point at the
+# user's own configuration directory. Both local wrappers override it to
+# `local` so a checkout compiles its working tree. `components_ref` names the
+# ref that source is fetched from — see components-git.yaml.
 substitutions:
   build_mode: dist
+  components_source: git
+  components_ref: main
 
 packages:
   wifi_creds: !include wifi-${build_mode}.yaml
   api_ota_creds: !include creds-${build_mode}.yaml
+  components_src: !include components-${components_source}.yaml
 
 # Where ESPHome Device Builder fetches this user-customizable configuration
 # when a freshly flashed factory device is adopted. Device Builder creates a
@@ -54,22 +64,19 @@ packages:
 dashboard_import:
   package_import_url: github://CrazyCoder/quietcool-esphome-native/quietcool-atticfan.yaml@main
 
-external_components:
-  - source:
-      type: local
-      path: components
-    components: [fan_controller, http_flash_handler, led_state_machine, oem_ble_compat, oem_nvs_reader]
-
 esp32:
   board: esp-wrover-kit
   framework:
     type: esp-idf
     sdkconfig_options:
       CONFIG_ESPTOOLPY_FLASHSIZE_4MB: "y"
-  partitions: ./partitions.csv
 
-# OEM-compatible partition layout means OTA slots are 1.875 MB each.
-# Watch for the image to stay under that during compile.
+# Installs components/oem_partitions/partitions.csv as the build's partition
+# table. `esp32: partitions:` cannot be used here: its path resolves against the
+# configuration directory, which after Take Control is the user's own, not this
+# repository. OEM-compatible layout means OTA slots are 1.875 MB each — watch
+# for the image to stay under that during compile.
+oem_partitions:
 
 # --- Bump preference flush interval well above ESPHome's 60s default. The OEM
 # allocated only a 16 KB NVS partition (can't be expanded without UART

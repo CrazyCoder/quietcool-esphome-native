@@ -160,8 +160,8 @@ image. Examples:
 - ❌ **Anything not built for ESP32 / not a `0xE9`-magic ESP-IDF image** — the OTA
   aborts when the image header doesn't validate, so this fails fast.
 
-When in doubt, build your custom firmware from this project (which already wires
-`partitions: ./partitions.csv`) — that guarantees compatibility.
+When in doubt, build your custom firmware from this project (whose
+`oem_partitions` component installs the layout) — that guarantees compatibility.
 
 The local page POSTs `/api/flash_url?url=…&md5=…` with an empty body. The device's
 `http_flash_handler` responds `200 OK` ("Accepted") immediately, then ~500 ms later starts

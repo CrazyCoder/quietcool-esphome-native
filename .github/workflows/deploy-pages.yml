@@ -49,7 +49,7 @@ jobs:
             git ls-files --stage -- \
                 quietcool-atticfan.factory.yaml quietcool-atticfan.yaml \
                 firmware-version.yaml wifi-dist.yaml creds-dist.yaml \
-                partitions.csv components \
+                components-local.yaml components \
               | awk 'index($4, "/test/") == 0' \
               | sha256sum \
               | awk '{print $1}'
@@ -143,7 +143,7 @@ jobs:
           path: |
             web-installer/firmware.ota.bin
             web-installer/firmware.ota.bin.md5
-          key: fw-${{ hashFiles('quietcool-atticfan.factory.yaml', 'quietcool-atticfan.yaml', 'firmware-version.yaml', 'wifi-dist.yaml', 'creds-dist.yaml', 'partitions.csv', 'components/**', '!components/**/test/**', '.github/workflows/deploy-pages.yml') }}
+          key: fw-${{ hashFiles('quietcool-atticfan.factory.yaml', 'quietcool-atticfan.yaml', 'firmware-version.yaml', 'wifi-dist.yaml', 'creds-dist.yaml', 'components-local.yaml', 'components/**', '!components/**/test/**', '.github/workflows/deploy-pages.yml') }}
 
       - uses: actions/setup-python@v6
         with:

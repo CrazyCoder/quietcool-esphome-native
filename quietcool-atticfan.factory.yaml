@@ -2,9 +2,12 @@
 # is identical for every hub, so it can safely self-update from the project's
 # GitHub Pages manifest. dashboard_import in the base config points Device
 # Builder at quietcool-atticfan.yaml, which intentionally omits this updater.
+# The published binary is built from this checkout, so components come from
+# the working tree rather than from GitHub.
 
 substitutions:
   build_mode: dist
+  components_source: local
 
 packages:
   quietcool_atticfan: !include quietcool-atticfan.yaml

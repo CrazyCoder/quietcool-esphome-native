@@ -1,0 +1,23 @@
+# Remote component source, selected by `components_source: git` (the default).
+# An adopted Device Builder install consumes quietcool-atticfan.yaml as a remote
+# package, so `type: local` would resolve `components/` against the user's own
+# configuration directory. Fetching the same repository directly keeps the C++
+# available wherever the YAML is used.
+#
+# `components_ref` defaults to `main`, matching the ref dashboard_import writes
+# into the generated per-device configuration. If you pin your package line to a
+# release tag, set the same tag in your device's `substitutions:` so the C++ and
+# the YAML come from one commit.
+
+external_components:
+  - source:
+      type: git
+      url: https://github.com/CrazyCoder/quietcool-esphome-native
+      ref: ${components_ref}
+    components:
+      - fan_controller
+      - http_flash_handler
+      - led_state_machine
+      - oem_ble_compat
+      - oem_nvs_reader
+      - oem_partitions
