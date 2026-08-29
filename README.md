@@ -172,8 +172,8 @@ On first boot after flashing over OEM firmware, existing presets are imported fr
 | `button.<device>_clear_ble_pairings` | Wipe all stored BLE pair-ids from NVS. Existing Smart Control app clients must re-pair afterward. |
 | `sensor.<device>_ble_active_clients` | ESPHome's current BLE client count. A non-zero value when no phone is connected can identify stale client state. |
 | `sensor.<device>_ble_stack_resets` | Full BLE stack resets since the last controller boot. |
-| `text_sensor.<device>_ble_advertising_status` | Last advertising start or stop result, including the ESP-IDF status code after a failure. |
-| `text_sensor.<device>_ble_last_reset_reason` | Reason for the last automatic or manual BLE stack reset. |
+| `sensor.<device>_ble_advertising_status` | Last advertising start or stop result, including the ESP-IDF status code after a failure. |
+| `sensor.<device>_ble_last_reset_reason` | Reason for the last automatic or manual BLE stack reset. |
 | `update.<device>_firmware` | New project releases for shared factory builds. Install from HA or from the local web UI; adopted Device Builder builds intentionally omit this generic updater. |
 | `text_sensor.<device>_mac_wi_fi` | Wi-Fi MAC address. |
 | `text_sensor.<device>_mac_ble` | BLE MAC address (differs from Wi-Fi MAC by +2 on ESP32). |
