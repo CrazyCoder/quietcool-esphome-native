@@ -652,8 +652,15 @@ void OemBleCompat::gap_event_handler(esp_gap_ble_cb_event_t event,
     publish_ble_advertising_status_("Started", status);
     if (status == ESP_BT_STATUS_SUCCESS) {
       ESP_LOGI(TAG, "BLE advertising start completed: status=%d", status);
-      // Re-assert our raw payloads after ESPHome rebuilds its structured
-      // advertisement on connection teardown or a full BLE stack cycle.
+      // ESPHome rebuilds its structured advertisement after a disconnect or
+      // a full stack cycle. Reapply the OEM raw payload only while the OEM
+      // service is running. Improv owns advertising while this service is
+      // stopped, so removing the service_started_ guard breaks onboarding.
+      //
+      // ESPHome starts its structured packet before this completion event.
+      // During that brief window byte 5 is 'A' from ATTICFAN, and the OEM app
+      // can show the generic fan photo. This callback cannot close that race;
+      // closing it requires removing ESPHome's structured advertising path.
       if (service_started_)
         apply_oem_raw_adv_();
     } else {
