@@ -1,5 +1,5 @@
 // Host-side unit tests for OemBleCompatLogic — pair-state machine, gate
-// checks, field-format conversions, frame assembly, response chunking.
+// checks, NVS flush gating, idle recovery, field conversions, and framing.
 //
 // Compile + run:
 //   g++ -std=c++17 -I.. test_oem_ble_compat_logic.cpp -o test_oem_ble_compat_logic.exe
@@ -263,6 +263,26 @@ TEST("BLE idle timeout handles millis wraparound") {
   REQUIRE_EQ(watchdog.update(true, false, 1, START), BleIdleAction::None);
   REQUIRE_EQ(watchdog.update(true, false, 1, START + BleIdleWatchdog::IDLE_TIMEOUT_MS),
              BleIdleAction::CloseClient);
+}
+
+// ============================================================================
+// 4d. NVS flush gating
+// ============================================================================
+
+TEST("hx_list flush waits for both its delay and an idle BLE server") {
+  constexpr uint32_t DIRTY_AT = 100;
+  constexpr uint32_t DELAY = 50;
+
+  REQUIRE_EQ(hx_flush_due(0, DIRTY_AT + DELAY, DELAY, false), false);
+  REQUIRE_EQ(hx_flush_due(DIRTY_AT, DIRTY_AT + DELAY - 1, DELAY, false), false);
+  REQUIRE_EQ(hx_flush_due(DIRTY_AT, DIRTY_AT + DELAY, DELAY, true), false);
+  REQUIRE_EQ(hx_flush_due(DIRTY_AT, DIRTY_AT + DELAY, DELAY, false), true);
+}
+
+TEST("hx_list flush delay handles millis wraparound") {
+  constexpr uint32_t DIRTY_AT = 0xFFFFFFF0U;
+  constexpr uint32_t DELAY = 32;
+  REQUIRE_EQ(hx_flush_due(DIRTY_AT, DIRTY_AT + DELAY, DELAY, false), true);
 }
 
 // ============================================================================

@@ -93,6 +93,14 @@ inline bool setrouter_should_switch(bool currently_connected,
   return !(currently_connected && current_ssid == new_ssid);
 }
 
+// ── NVS flush decision ──────────────────────────────────────────────
+
+inline bool hx_flush_due(uint32_t dirty_since_ms, uint32_t now_ms,
+                         uint32_t delay_ms, bool ble_client_connected) {
+  return dirty_since_ms != 0 && !ble_client_connected &&
+         now_ms - dirty_since_ms >= delay_ms;
+}
+
 // ── Idle BLE client recovery ────────────────────────────────────────
 
 // Stock QuietCool firmware releases an idle BLE link after roughly 25 seconds.

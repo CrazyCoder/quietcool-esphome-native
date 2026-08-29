@@ -226,10 +226,11 @@ void OemBleCompat::loop() {
   if (hx_dirty_) {
     if (hx_dirty_since_ms_ == 0) {
       hx_dirty_since_ms_ = now_ms | 1;  // avoid 0 sentinel at boot/wrap
-    } else if (now_ms - hx_dirty_since_ms_ >= HX_FLUSH_DELAY_MS) {
+    } else {
       const bool ble_client_connected =
           server_ != nullptr && server_->get_connected_client_count() != 0;
-      if (!ble_client_connected)
+      if (::qc::hx_flush_due(hx_dirty_since_ms_, now_ms, HX_FLUSH_DELAY_MS,
+                             ble_client_connected))
         flush_hx_list_();
     }
   }

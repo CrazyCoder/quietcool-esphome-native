@@ -902,8 +902,8 @@ Where it **deliberately diverges** from stock:
   poll — so it's a latency nicety, not a parity requirement.
 
 The component ships with host-side unit tests covering gate checks, idle-client
-recovery, field mapping, frame assembly, the fan-model catalogue, URL classification,
-and input validation — see
+recovery, NVS flush gating, field mapping, frame assembly, the fan-model catalogue,
+URL classification, and input validation — see
 [`components/oem_ble_compat/test/`](../components/oem_ble_compat/test/).
 
 ---
