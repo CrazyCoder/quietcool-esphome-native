@@ -252,8 +252,10 @@ class OemBleCompat : public Component {
   // Protocol state
   ::qc::PairMachine pair_machine_;
   ::qc::FrameAssembler framer_;
-  bool ota_in_progress_ = false;
   uint8_t upgrade_state_ = ::qc::UPGRADE_STATE_IDLE;  // A=5 GetUpgradeState feedback
+  bool ota_in_progress_() const {
+    return upgrade_state_ == ::qc::UPGRADE_STATE_DOWNLOADING;
+  }
   std::string upgrade_url_;                           // captured for the deferred flash
   int upgrade_flash_retries_ = 0;
   static constexpr int UPGRADE_FLASH_MAX_RETRIES = 40;  // ~20s @ 500ms wait-for-Wi-Fi

@@ -238,7 +238,8 @@ void OemBleCompat::loop() {
 void OemBleCompat::run_ble_idle_watchdog_(bool oem_active, uint32_t now_ms) {
   const uint8_t client_count =
       server_ != nullptr ? server_->get_client_count() : 0;
-  switch (ble_idle_watchdog_.update(oem_active, client_count, now_ms)) {
+  switch (ble_idle_watchdog_.update(oem_active, ota_in_progress_(),
+                                    client_count, now_ms)) {
     case ::qc::BleIdleAction::None:
       return;
 
@@ -747,7 +748,7 @@ std::string OemBleCompat::dispatch_json_(const char *json_str) {
   // handler self-enforces PairMode); A=15 PairMode is NOT exempt — it requires
   // an authenticated session, matching stock (an unpaired device can only enter
   // pair mode via the physical KEY2 long-hold).
-  auto gate = ::qc::check_gate(a_code, pair_machine_.state, ota_in_progress_);
+  auto gate = ::qc::check_gate(a_code, pair_machine_.state, ota_in_progress_());
   if ((gate == ::qc::GateResult::NeedAuth && a_code != 13 && a_code != 14) ||
       gate == ::qc::GateResult::OtaBlocked) {
     cJSON_Delete(root);

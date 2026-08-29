@@ -189,33 +189,33 @@ TEST("setrouter_should_switch: switch when disconnected (recovery)") {
 
 TEST("BLE idle watchdog starts timing when a client appears") {
   BleIdleWatchdog watchdog;
-  REQUIRE_EQ(watchdog.update(true, 1, 1000), BleIdleAction::None);
-  REQUIRE_EQ(watchdog.update(true, 1, 1000 + BleIdleWatchdog::IDLE_TIMEOUT_MS - 1),
+  REQUIRE_EQ(watchdog.update(true, false, 1, 1000), BleIdleAction::None);
+  REQUIRE_EQ(watchdog.update(true, false, 1, 1000 + BleIdleWatchdog::IDLE_TIMEOUT_MS - 1),
              BleIdleAction::None);
-  REQUIRE_EQ(watchdog.update(true, 1, 1000 + BleIdleWatchdog::IDLE_TIMEOUT_MS),
+  REQUIRE_EQ(watchdog.update(true, false, 1, 1000 + BleIdleWatchdog::IDLE_TIMEOUT_MS),
              BleIdleAction::CloseClient);
 }
 
 TEST("BLE activity restarts the idle timeout") {
   BleIdleWatchdog watchdog;
-  REQUIRE_EQ(watchdog.update(true, 1, 1000), BleIdleAction::None);
+  REQUIRE_EQ(watchdog.update(true, false, 1, 1000), BleIdleAction::None);
   watchdog.note_activity(20000);
-  REQUIRE_EQ(watchdog.update(true, 1, 20000 + BleIdleWatchdog::IDLE_TIMEOUT_MS - 1),
+  REQUIRE_EQ(watchdog.update(true, false, 1, 20000 + BleIdleWatchdog::IDLE_TIMEOUT_MS - 1),
              BleIdleAction::None);
-  REQUIRE_EQ(watchdog.update(true, 1, 20000 + BleIdleWatchdog::IDLE_TIMEOUT_MS),
+  REQUIRE_EQ(watchdog.update(true, false, 1, 20000 + BleIdleWatchdog::IDLE_TIMEOUT_MS),
              BleIdleAction::CloseClient);
 }
 
 TEST("BLE idle watchdog recycles only if close does not clear the client") {
   BleIdleWatchdog watchdog;
-  REQUIRE_EQ(watchdog.update(true, 1, 1000), BleIdleAction::None);
-  REQUIRE_EQ(watchdog.update(true, 1, 1000 + BleIdleWatchdog::IDLE_TIMEOUT_MS),
+  REQUIRE_EQ(watchdog.update(true, false, 1, 1000), BleIdleAction::None);
+  REQUIRE_EQ(watchdog.update(true, false, 1, 1000 + BleIdleWatchdog::IDLE_TIMEOUT_MS),
              BleIdleAction::CloseClient);
-  REQUIRE_EQ(watchdog.update(true, 1,
+  REQUIRE_EQ(watchdog.update(true, false, 1,
                              1000 + BleIdleWatchdog::IDLE_TIMEOUT_MS +
                                  BleIdleWatchdog::CLOSE_GRACE_MS - 1),
              BleIdleAction::None);
-  REQUIRE_EQ(watchdog.update(true, 1,
+  REQUIRE_EQ(watchdog.update(true, false, 1,
                              1000 + BleIdleWatchdog::IDLE_TIMEOUT_MS +
                                  BleIdleWatchdog::CLOSE_GRACE_MS),
              BleIdleAction::RecycleStack);
@@ -223,13 +223,12 @@ TEST("BLE idle watchdog recycles only if close does not clear the client") {
 
 TEST("BLE disconnect cancels pending stack recovery") {
   BleIdleWatchdog watchdog;
-  REQUIRE_EQ(watchdog.update(true, 1, 1000), BleIdleAction::None);
-  REQUIRE_EQ(watchdog.update(true, 1, 1000 + BleIdleWatchdog::IDLE_TIMEOUT_MS),
+  REQUIRE_EQ(watchdog.update(true, false, 1, 1000), BleIdleAction::None);
+  REQUIRE_EQ(watchdog.update(true, false, 1, 1000 + BleIdleWatchdog::IDLE_TIMEOUT_MS),
              BleIdleAction::CloseClient);
-  REQUIRE_EQ(watchdog.update(true, 0,
-                             1000 + BleIdleWatchdog::IDLE_TIMEOUT_MS + 1),
+  REQUIRE_EQ(watchdog.update(true, false, 0, 1000 + BleIdleWatchdog::IDLE_TIMEOUT_MS + 1),
              BleIdleAction::None);
-  REQUIRE_EQ(watchdog.update(true, 0,
+  REQUIRE_EQ(watchdog.update(true, false, 0,
                              1000 + BleIdleWatchdog::IDLE_TIMEOUT_MS +
                                  BleIdleWatchdog::CLOSE_GRACE_MS),
              BleIdleAction::None);
@@ -237,18 +236,32 @@ TEST("BLE disconnect cancels pending stack recovery") {
 
 TEST("BLE watchdog is disabled while OEM BLE yields to Improv") {
   BleIdleWatchdog watchdog;
-  REQUIRE_EQ(watchdog.update(true, 1, 1000), BleIdleAction::None);
-  REQUIRE_EQ(watchdog.update(false, 1, 1000 + BleIdleWatchdog::IDLE_TIMEOUT_MS),
+  REQUIRE_EQ(watchdog.update(true, false, 1, 1000), BleIdleAction::None);
+  REQUIRE_EQ(watchdog.update(false, false, 1, 1000 + BleIdleWatchdog::IDLE_TIMEOUT_MS),
              BleIdleAction::None);
-  REQUIRE_EQ(watchdog.update(true, 1, 1000 + BleIdleWatchdog::IDLE_TIMEOUT_MS + 1),
+  REQUIRE_EQ(watchdog.update(true, false, 1, 1000 + BleIdleWatchdog::IDLE_TIMEOUT_MS + 1),
              BleIdleAction::None);
+}
+
+TEST("BLE watchdog is suspended during OTA") {
+  BleIdleWatchdog watchdog;
+  REQUIRE_EQ(watchdog.update(true, false, 1, 1000), BleIdleAction::None);
+  REQUIRE_EQ(watchdog.update(true, true, 1,
+                             1000 + BleIdleWatchdog::IDLE_TIMEOUT_MS),
+             BleIdleAction::None);
+  REQUIRE_EQ(watchdog.update(true, false, 1,
+                             1000 + BleIdleWatchdog::IDLE_TIMEOUT_MS + 1),
+             BleIdleAction::None);
+  REQUIRE_EQ(watchdog.update(true, false, 1,
+                             1000 + 2 * BleIdleWatchdog::IDLE_TIMEOUT_MS + 1),
+             BleIdleAction::CloseClient);
 }
 
 TEST("BLE idle timeout handles millis wraparound") {
   BleIdleWatchdog watchdog;
   constexpr uint32_t START = 0xFFFFFF00U;
-  REQUIRE_EQ(watchdog.update(true, 1, START), BleIdleAction::None);
-  REQUIRE_EQ(watchdog.update(true, 1, START + BleIdleWatchdog::IDLE_TIMEOUT_MS),
+  REQUIRE_EQ(watchdog.update(true, false, 1, START), BleIdleAction::None);
+  REQUIRE_EQ(watchdog.update(true, false, 1, START + BleIdleWatchdog::IDLE_TIMEOUT_MS),
              BleIdleAction::CloseClient);
 }
 

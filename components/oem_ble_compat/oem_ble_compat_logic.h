@@ -98,9 +98,11 @@ inline bool setrouter_should_switch(bool currently_connected,
 // Stock QuietCool firmware releases an idle BLE link after roughly 25 seconds.
 // Enforce a comparable bound so one abandoned client cannot monopolize the
 // server, and so a dropped ESP_GATTS_DISCONNECT_EVT cannot leave ESPHome's
-// client count pinned forever. The wrapper first asks Bluedroid to close the
-// recorded connection; if ESPHome still reports it after the grace period, the
-// complete BLE stack must be recycled to clear stale server and CCCD state.
+// client count pinned forever. Recovery is suspended during OTA because cycling
+// the BLE stack while ota.http_request is writing flash would risk disrupting
+// the update. The wrapper first asks Bluedroid to close the recorded connection;
+// if ESPHome still reports it after the grace period, the complete BLE stack
+// must be recycled to clear stale server and CCCD state.
 enum class BleIdleAction : uint8_t {
   None,
   CloseClient,
@@ -118,8 +120,9 @@ class BleIdleWatchdog {
     last_activity_ms_ = now_ms;
   }
 
-  BleIdleAction update(bool oem_active, uint8_t client_count, uint32_t now_ms) {
-    if (!oem_active || client_count == 0) {
+  BleIdleAction update(bool oem_active, bool ota_in_progress,
+                       uint8_t client_count, uint32_t now_ms) {
+    if (!oem_active || ota_in_progress || client_count == 0) {
       reset();
       return BleIdleAction::None;
     }

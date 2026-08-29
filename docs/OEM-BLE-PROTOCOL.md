@@ -856,8 +856,11 @@ The component closes an idle OEM BLE client after 30 seconds, matching stock's
 bounded-session behavior. If the connection remains registered for another 5 seconds
 (for example, because ESPHome dropped the disconnect event while its BLE event queue
 was full), it recycles the BLE stack to clear stale server and notification state,
-then resumes advertising automatically. NVS write-through is also deferred while a
-BLE client is connected so a synchronous flash commit cannot block BLE event handling.
+then resumes advertising automatically. The idle watchdog is suspended from OTA
+acceptance until failure or the successful reboot, so it cannot recycle the radio
+while `ota.http_request` is writing flash. NVS write-through is also deferred while
+a BLE client is connected so a synchronous flash commit cannot block BLE event
+handling.
 
 Where it **deliberately diverges** from stock:
 
