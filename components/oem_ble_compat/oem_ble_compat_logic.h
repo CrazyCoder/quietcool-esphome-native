@@ -128,6 +128,14 @@ class HxFlushTimer {
 // after every tracked client is confirmed absent twice. Healthy idle links are
 // never closed; stock permits authenticated clients to remain connected
 // indefinitely.
+
+inline bool all_tracked_links_stale(uint8_t client_count,
+                                    uint8_t tracked_count,
+                                    uint8_t stale_count) {
+  return client_count != 0 && tracked_count == client_count &&
+         stale_count == tracked_count;
+}
+
 class BleLinkHealthMonitor {
  public:
   static constexpr uint32_t PROBE_INTERVAL_MS = 5000;

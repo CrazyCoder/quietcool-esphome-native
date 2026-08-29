@@ -251,29 +251,28 @@ void OemBleCompat::run_ble_link_health_check_(bool oem_active,
     return;
   }
 
-  bool all_tracked_stale = true;
+  uint8_t stale_count = 0;
   for (uint8_t i = 0; i < client_count; ++i) {
     TrackedBlePeer *peer = find_ble_peer_(clients[i]);
-    if (peer == nullptr) {
-      all_tracked_stale = false;
-      break;
-    }
+    if (peer == nullptr)
+      continue;
 
     esp_gap_conn_params_t conn_params{};
     const esp_err_t err =
         esp_ble_get_current_conn_params(peer->remote_bda, &conn_params);
-    if (err == ESP_OK) {
-      all_tracked_stale = false;
-    } else if (err == ESP_ERR_NOT_FOUND) {
+    if (err == ESP_ERR_NOT_FOUND) {
+      ++stale_count;
       ESP_LOGD(TAG, "BLE conn_id=%u is absent from Bluedroid",
                static_cast<unsigned>(peer->conn_id));
-    } else {
+    } else if (err != ESP_OK) {
       ESP_LOGW(TAG, "Could not verify BLE conn_id=%u (err=0x%X)",
                static_cast<unsigned>(peer->conn_id),
                static_cast<unsigned>(err));
-      all_tracked_stale = false;
     }
   }
+
+  const bool all_tracked_stale = ::qc::all_tracked_links_stale(
+      client_count, tracked_count, stale_count);
 
   if (ble_link_health_monitor_.record_probe(now_ms,
                                              all_tracked_stale)) {

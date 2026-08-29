@@ -179,6 +179,13 @@ TEST("setrouter_should_switch: switch when disconnected (recovery)") {
 // 4c. BLE link-health recovery
 // ============================================================================
 
+TEST("BLE stale snapshot requires complete all-stale coverage") {
+  REQUIRE(!all_tracked_links_stale(0, 0, 0));
+  REQUIRE(!all_tracked_links_stale(2, 1, 1));
+  REQUIRE(!all_tracked_links_stale(2, 2, 1));
+  REQUIRE(all_tracked_links_stale(2, 2, 2));
+}
+
 TEST("BLE link monitor waits one interval before probing") {
   BleLinkHealthMonitor monitor;
   REQUIRE(!monitor.probe_due(true, false, 1, 1, 1000));
@@ -195,13 +202,15 @@ TEST("BLE link monitor never recycles a healthy idle client") {
   REQUIRE(!monitor.probe_due(true, false, 1, 1, 1000));
   constexpr uint32_t FIRST_PROBE =
       1000 + BleLinkHealthMonitor::PROBE_INTERVAL_MS;
+  const bool all_stale = all_tracked_links_stale(1, 1, 0);
+  REQUIRE(!all_stale);
   REQUIRE(monitor.probe_due(true, false, 1, 1, FIRST_PROBE));
-  REQUIRE(!monitor.record_probe(FIRST_PROBE, false));
+  REQUIRE(!monitor.record_probe(FIRST_PROBE, all_stale));
   REQUIRE(monitor.probe_due(
       true, false, 1, 1,
       FIRST_PROBE + BleLinkHealthMonitor::PROBE_INTERVAL_MS));
   REQUIRE(!monitor.record_probe(
-      FIRST_PROBE + BleLinkHealthMonitor::PROBE_INTERVAL_MS, false));
+      FIRST_PROBE + BleLinkHealthMonitor::PROBE_INTERVAL_MS, all_stale));
 }
 
 TEST("BLE link monitor requires two all-stale probes") {
@@ -209,12 +218,14 @@ TEST("BLE link monitor requires two all-stale probes") {
   REQUIRE(!monitor.probe_due(true, false, 2, 2, 1000));
   constexpr uint32_t FIRST_PROBE =
       1000 + BleLinkHealthMonitor::PROBE_INTERVAL_MS;
+  const bool all_stale = all_tracked_links_stale(2, 2, 2);
+  REQUIRE(all_stale);
   REQUIRE(monitor.probe_due(true, false, 2, 2, FIRST_PROBE));
-  REQUIRE(!monitor.record_probe(FIRST_PROBE, true));
+  REQUIRE(!monitor.record_probe(FIRST_PROBE, all_stale));
   constexpr uint32_t SECOND_PROBE =
       FIRST_PROBE + BleLinkHealthMonitor::PROBE_INTERVAL_MS;
   REQUIRE(monitor.probe_due(true, false, 2, 2, SECOND_PROBE));
-  REQUIRE(monitor.record_probe(SECOND_PROBE, true));
+  REQUIRE(monitor.record_probe(SECOND_PROBE, all_stale));
 }
 
 TEST("BLE link monitor preserves live peers when another peer is stale") {
@@ -222,16 +233,20 @@ TEST("BLE link monitor preserves live peers when another peer is stale") {
   REQUIRE(!monitor.probe_due(true, false, 2, 2, 1000));
   constexpr uint32_t FIRST_PROBE =
       1000 + BleLinkHealthMonitor::PROBE_INTERVAL_MS;
+  const bool all_stale = all_tracked_links_stale(2, 2, 2);
+  const bool mixed_live_and_stale = all_tracked_links_stale(2, 2, 1);
+  REQUIRE(all_stale);
+  REQUIRE(!mixed_live_and_stale);
   REQUIRE(monitor.probe_due(true, false, 2, 2, FIRST_PROBE));
-  REQUIRE(!monitor.record_probe(FIRST_PROBE, true));
+  REQUIRE(!monitor.record_probe(FIRST_PROBE, all_stale));
   constexpr uint32_t MIXED_PROBE =
       FIRST_PROBE + BleLinkHealthMonitor::PROBE_INTERVAL_MS;
   REQUIRE(monitor.probe_due(true, false, 2, 2, MIXED_PROBE));
-  REQUIRE(!monitor.record_probe(MIXED_PROBE, false));
+  REQUIRE(!monitor.record_probe(MIXED_PROBE, mixed_live_and_stale));
   constexpr uint32_t NEXT_STALE_PROBE =
       MIXED_PROBE + BleLinkHealthMonitor::PROBE_INTERVAL_MS;
   REQUIRE(monitor.probe_due(true, false, 2, 2, NEXT_STALE_PROBE));
-  REQUIRE(!monitor.record_probe(NEXT_STALE_PROBE, true));
+  REQUIRE(!monitor.record_probe(NEXT_STALE_PROBE, all_stale));
 }
 
 TEST("BLE link monitor requires complete conn-id tracking") {
@@ -252,13 +267,15 @@ TEST("BLE link monitor resets after all clients disconnect") {
   constexpr uint32_t FIRST_PROBE =
       1000 + BleLinkHealthMonitor::PROBE_INTERVAL_MS;
   REQUIRE(monitor.probe_due(true, false, 1, 1, FIRST_PROBE));
-  REQUIRE(!monitor.record_probe(FIRST_PROBE, true));
+  REQUIRE(!monitor.record_probe(
+      FIRST_PROBE, all_tracked_links_stale(1, 1, 1)));
   REQUIRE(!monitor.probe_due(true, false, 0, 0, FIRST_PROBE + 1));
   REQUIRE(!monitor.probe_due(true, false, 1, 1, FIRST_PROBE + 2));
   constexpr uint32_t RECONNECTED_PROBE =
       FIRST_PROBE + 2 + BleLinkHealthMonitor::PROBE_INTERVAL_MS;
   REQUIRE(monitor.probe_due(true, false, 1, 1, RECONNECTED_PROBE));
-  REQUIRE(!monitor.record_probe(RECONNECTED_PROBE, true));
+  REQUIRE(!monitor.record_probe(
+      RECONNECTED_PROBE, all_tracked_links_stale(1, 1, 1)));
 }
 
 TEST("BLE link monitor is suspended during OTA and Improv handoff") {
