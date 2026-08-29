@@ -852,6 +852,13 @@ enters pair mode only via a physical KEY2 press on the device, and `PairMode` (A
 auth-gated, so an in-range stranger can't pair themselves remotely (the physical button is
 the trust boundary — treating A=15 as pre-auth would be a remote-pairing hole).
 
+The component closes an idle OEM BLE client after 30 seconds, matching stock's
+bounded-session behavior. If the connection remains registered for another 5 seconds
+(for example, because ESPHome dropped the disconnect event while its BLE event queue
+was full), it recycles the BLE stack to clear stale server and notification state,
+then resumes advertising automatically. NVS write-through is also deferred while a
+BLE client is connected so a synchronous flash commit cannot block BLE event handling.
+
 Where it **deliberately diverges** from stock:
 
 - **`Upgrade` (A=10) is the trigger, and it filters URLs.** Unlike stock — where
@@ -891,8 +898,9 @@ Where it **deliberately diverges** from stock:
   strict subset of `GetWorkState`), the app still reflects a local speed change within one
   poll — so it's a latency nicety, not a parity requirement.
 
-The component ships with host-side unit tests covering gate checks, field mapping, frame
-assembly, the fan-model catalogue, URL classification, and input validation — see
+The component ships with host-side unit tests covering gate checks, idle-client
+recovery, field mapping, frame assembly, the fan-model catalogue, URL classification,
+and input validation — see
 [`components/oem_ble_compat/test/`](../components/oem_ble_compat/test/).
 
 ---

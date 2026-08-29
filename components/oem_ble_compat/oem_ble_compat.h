@@ -118,6 +118,8 @@ class OemBleCompat : public Component {
   void setup_ble_service_();
   void start_service_();
   void stop_service_();
+  void run_ble_idle_watchdog_(bool oem_active, uint32_t now_ms);
+  void begin_ble_stack_recovery_();
   // "ATTICFAN_<mac>" + NUL, the GAP name that carries the app's scan filter.
   static constexpr size_t OEM_BLE_NAME_BUFFER_SIZE = 22;
   // Manufacturer AD payload: model digit + 25 fan-name bytes, NUL padded to a
@@ -244,6 +246,8 @@ class OemBleCompat : public Component {
   bool service_created_ = false;
   bool service_started_ = false;
   bool pending_restart_ = false;
+  ::qc::BleIdleWatchdog ble_idle_watchdog_;
+  bool ble_recovery_pending_ = false;
 
   // Protocol state
   ::qc::PairMachine pair_machine_;

@@ -163,6 +163,24 @@ bool OemBleCompat::want_active_() const {
 }
 
 void OemBleCompat::loop() {
+  if (ble_recovery_pending_) {
+    auto *ble = esp32_ble::global_ble;
+    if (ble == nullptr) {
+      ESP_LOGE(TAG, "BLE stack recovery failed: ESP32BLE is unavailable");
+      ble_recovery_pending_ = false;
+      return;
+    }
+    if (!ble->is_active()) {
+      // disable() and enable() are asynchronous state requests. Repeating
+      // enable() is harmless: it takes effect only after disable completed.
+      ble->enable();
+      return;
+    }
+    ble_recovery_pending_ = false;
+    ESP_LOGI(TAG, "BLE stack recovery completed");
+  }
+
+  const uint32_t now_ms = millis();
   bool want_active = want_active_();
 
   if (want_active && !service_created_) {
@@ -189,22 +207,90 @@ void OemBleCompat::loop() {
     pending_restart_ = false;
   }
 
+  run_ble_idle_watchdog_(want_active && service_started_, now_ms);
+  if (ble_recovery_pending_)
+    return;
+
   // Pair-mode timeout check — auto-off the switch when it expires.
   bool was_pair_mode = (pair_machine_.state == ::qc::PairState::PairMode);
-  pair_machine_.check_timeout(millis());
+  pair_machine_.check_timeout(now_ms);
   if (was_pair_mode && pair_machine_.state != ::qc::PairState::PairMode) {
     if (pair_mode_switch_) pair_mode_switch_->publish_state(false);
     ESP_LOGI(TAG, "Pair mode timed out");
   }
 
-  // Debounced hx_list write-through.
+  // Debounced hx_list write-through. NVS commit is synchronous and the OEM
+  // partition is nearly full, so never perform it while a BLE client is live:
+  // blocking the main loop can fill ESPHome's lossy GATTS event queue and drop
+  // the disconnect event that restarts advertising.
   if (hx_dirty_) {
     if (hx_dirty_since_ms_ == 0) {
-      hx_dirty_since_ms_ = millis() | 1;  // avoid 0 sentinel at boot/wrap
-    } else if (millis() - hx_dirty_since_ms_ >= HX_FLUSH_DELAY_MS) {
-      flush_hx_list_();
+      hx_dirty_since_ms_ = now_ms | 1;  // avoid 0 sentinel at boot/wrap
+    } else if (now_ms - hx_dirty_since_ms_ >= HX_FLUSH_DELAY_MS) {
+      const bool ble_client_connected =
+          server_ != nullptr && server_->get_connected_client_count() != 0;
+      if (!ble_client_connected)
+        flush_hx_list_();
     }
   }
+}
+
+void OemBleCompat::run_ble_idle_watchdog_(bool oem_active, uint32_t now_ms) {
+  const uint8_t client_count =
+      server_ != nullptr ? server_->get_client_count() : 0;
+  switch (ble_idle_watchdog_.update(oem_active, client_count, now_ms)) {
+    case ::qc::BleIdleAction::None:
+      return;
+
+    case ::qc::BleIdleAction::CloseClient: {
+      ESP_LOGI(TAG, "Closing %u idle BLE client%s",
+               static_cast<unsigned>(client_count), client_count == 1 ? "" : "s");
+      bool close_accepted = false;
+      const uint16_t *clients = server_->get_clients();
+      for (uint8_t i = 0; i < client_count; ++i) {
+        esp_err_t err =
+            esp_ble_gatts_close(server_->get_gatts_if(), clients[i]);
+        if (err == ESP_OK) {
+          close_accepted = true;
+        } else {
+          ESP_LOGW(TAG, "Could not close BLE conn_id=%u (err=0x%X)",
+                   static_cast<unsigned>(clients[i]), static_cast<unsigned>(err));
+        }
+      }
+      if (!close_accepted)
+        begin_ble_stack_recovery_();
+      return;
+    }
+
+    case ::qc::BleIdleAction::RecycleStack:
+      ESP_LOGW(TAG, "Idle BLE client did not disconnect; recycling BLE stack");
+      begin_ble_stack_recovery_();
+      return;
+  }
+}
+
+void OemBleCompat::begin_ble_stack_recovery_() {
+  if (ble_recovery_pending_)
+    return;
+  auto *ble = esp32_ble::global_ble;
+  if (ble == nullptr) {
+    ESP_LOGE(TAG, "Cannot recycle BLE stack: ESP32BLE is unavailable");
+    return;
+  }
+
+  // A service stop/start does not clear BLEServer::client_count_ or the
+  // characteristic's CCCD notification list. A complete stack cycle invokes
+  // BLEServer::ble_before_disabled_event_handler(), which clears both.
+  ESP_LOGW(TAG, "Recycling BLE stack to clear stale client state");
+  ble_idle_watchdog_.reset();
+  framer_.clear();
+  service_started_ = false;
+  pending_restart_ = false;
+#ifdef USE_WIFI
+  esp_coex_preference_set(ESP_COEX_PREFER_BALANCE);
+#endif
+  ble_recovery_pending_ = true;
+  ble->disable();
 }
 
 void OemBleCompat::dump_config() {
@@ -561,6 +647,7 @@ void OemBleCompat::stop_service_() {
 // ── BLE write handler ───────────────────────────────────────────────
 
 void OemBleCompat::on_ble_write_(const std::vector<uint8_t> &data) {
+  ble_idle_watchdog_.note_activity(millis());
   ESP_LOGD(TAG, "BLE write received: %u bytes", (unsigned) data.size());
   if (!framer_.feed(data.data(), data.size())) {
     ESP_LOGW(TAG, "BLE frame exceeded %u bytes without completing — buffer dropped",

@@ -1,7 +1,8 @@
 // OEM BLE protocol logic — pure C++17, no ESPHome includes.
-// Covers: pair-state machine, command gate checks, OEM field-format
-// conversions, BLE frame assembly, and response builders for each of the
-// 22 JSON commands. Tested host-side via test/test_oem_ble_compat_logic.cpp.
+// Covers: pair-state and idle-client recovery machines, command gate checks,
+// OEM field-format conversions, BLE frame assembly, and response builders for
+// each of the 22 JSON commands. Tested host-side via
+// test/test_oem_ble_compat_logic.cpp.
 //
 // The ESPHome wrapper (oem_ble_compat.h/.cpp) owns the GATT service, JSON
 // parse/serialize, and fan_controller references.
@@ -91,6 +92,72 @@ inline bool setrouter_should_switch(bool currently_connected,
                                     const std::string &new_ssid) {
   return !(currently_connected && current_ssid == new_ssid);
 }
+
+// ── Idle BLE client recovery ────────────────────────────────────────
+
+// Stock QuietCool firmware releases an idle BLE link after roughly 25 seconds.
+// Enforce a comparable bound so one abandoned client cannot monopolize the
+// server, and so a dropped ESP_GATTS_DISCONNECT_EVT cannot leave ESPHome's
+// client count pinned forever. The wrapper first asks Bluedroid to close the
+// recorded connection; if ESPHome still reports it after the grace period, the
+// complete BLE stack must be recycled to clear stale server and CCCD state.
+enum class BleIdleAction : uint8_t {
+  None,
+  CloseClient,
+  RecycleStack,
+};
+
+class BleIdleWatchdog {
+ public:
+  static constexpr uint32_t IDLE_TIMEOUT_MS = 30000;
+  static constexpr uint32_t CLOSE_GRACE_MS = 5000;
+
+  void note_activity(uint32_t now_ms) {
+    tracking_client_ = true;
+    close_requested_ = false;
+    last_activity_ms_ = now_ms;
+  }
+
+  BleIdleAction update(bool oem_active, uint8_t client_count, uint32_t now_ms) {
+    if (!oem_active || client_count == 0) {
+      reset();
+      return BleIdleAction::None;
+    }
+
+    if (!tracking_client_) {
+      tracking_client_ = true;
+      last_activity_ms_ = now_ms;
+      return BleIdleAction::None;
+    }
+
+    if (!close_requested_) {
+      if (now_ms - last_activity_ms_ < IDLE_TIMEOUT_MS)
+        return BleIdleAction::None;
+      close_requested_ = true;
+      close_requested_ms_ = now_ms;
+      return BleIdleAction::CloseClient;
+    }
+
+    if (now_ms - close_requested_ms_ < CLOSE_GRACE_MS)
+      return BleIdleAction::None;
+
+    reset();
+    return BleIdleAction::RecycleStack;
+  }
+
+  void reset() {
+    tracking_client_ = false;
+    close_requested_ = false;
+    last_activity_ms_ = 0;
+    close_requested_ms_ = 0;
+  }
+
+ private:
+  bool tracking_client_ = false;
+  bool close_requested_ = false;
+  uint32_t last_activity_ms_ = 0;
+  uint32_t close_requested_ms_ = 0;
+};
 
 // ── OEM field format helpers ────────────────────────────────────────
 
