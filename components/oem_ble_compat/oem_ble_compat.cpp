@@ -224,15 +224,11 @@ void OemBleCompat::loop() {
   // blocking the main loop can fill ESPHome's lossy GATTS event queue and drop
   // the disconnect event that restarts advertising.
   if (hx_dirty_) {
-    if (hx_dirty_since_ms_ == 0) {
-      hx_dirty_since_ms_ = now_ms | 1;  // avoid 0 sentinel at boot/wrap
-    } else {
-      const bool ble_client_connected =
-          server_ != nullptr && server_->get_connected_client_count() != 0;
-      if (::qc::hx_flush_due(hx_dirty_since_ms_, now_ms, HX_FLUSH_DELAY_MS,
-                             ble_client_connected))
-        flush_hx_list_();
-    }
+    hx_flush_timer_.start_if_needed(now_ms);
+    const bool ble_client_connected =
+        server_ != nullptr && server_->get_connected_client_count() != 0;
+    if (hx_flush_timer_.due(now_ms, HX_FLUSH_DELAY_MS, ble_client_connected))
+      flush_hx_list_();
   }
 }
 
@@ -310,7 +306,7 @@ void OemBleCompat::on_shutdown() {
 // stock-firmware restore picks up the user's latest settings.
 void OemBleCompat::flush_hx_list_() {
   hx_dirty_ = false;
-  hx_dirty_since_ms_ = 0;
+  hx_flush_timer_.reset();
 
   nvs_handle_t h;
   if (nvs_open("hx_list", NVS_READWRITE, &h) != ESP_OK) {

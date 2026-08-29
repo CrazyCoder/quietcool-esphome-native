@@ -279,7 +279,7 @@ class OemBleCompat : public Component {
   // Debounced write-through: current ESPHome entity state → OEM hx_list NVS.
   // Covers thresholds, timer defaults, fan info, presets, guide_setup.
   bool hx_dirty_ = false;
-  uint32_t hx_dirty_since_ms_ = 0;
+  ::qc::HxFlushTimer hx_flush_timer_;
   static constexpr uint32_t HX_FLUSH_DELAY_MS = 30000;
   void flush_hx_list_();
 

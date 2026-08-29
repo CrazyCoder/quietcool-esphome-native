@@ -269,20 +269,26 @@ TEST("BLE idle timeout handles millis wraparound") {
 // 4d. NVS flush gating
 // ============================================================================
 
-TEST("hx_list flush waits for both its delay and an idle BLE server") {
-  constexpr uint32_t DIRTY_AT = 100;
+TEST("hx_list flush timer accepts millis zero as a real start time") {
+  HxFlushTimer timer;
   constexpr uint32_t DELAY = 50;
 
-  REQUIRE_EQ(hx_flush_due(0, DIRTY_AT + DELAY, DELAY, false), false);
-  REQUIRE_EQ(hx_flush_due(DIRTY_AT, DIRTY_AT + DELAY - 1, DELAY, false), false);
-  REQUIRE_EQ(hx_flush_due(DIRTY_AT, DIRTY_AT + DELAY, DELAY, true), false);
-  REQUIRE_EQ(hx_flush_due(DIRTY_AT, DIRTY_AT + DELAY, DELAY, false), true);
+  REQUIRE_EQ(timer.due(DELAY, DELAY, false), false);
+  timer.start_if_needed(0);
+  REQUIRE_EQ(timer.due(DELAY - 1, DELAY, false), false);
+  timer.start_if_needed(DELAY - 1);
+  REQUIRE_EQ(timer.due(DELAY, DELAY, true), false);
+  REQUIRE_EQ(timer.due(DELAY, DELAY, false), true);
+  timer.reset();
+  REQUIRE_EQ(timer.due(2 * DELAY, DELAY, false), false);
 }
 
-TEST("hx_list flush delay handles millis wraparound") {
-  constexpr uint32_t DIRTY_AT = 0xFFFFFFF0U;
+TEST("hx_list flush timer handles millis wraparound") {
+  HxFlushTimer timer;
+  constexpr uint32_t START = 0xFFFFFFF0U;
   constexpr uint32_t DELAY = 32;
-  REQUIRE_EQ(hx_flush_due(DIRTY_AT, DIRTY_AT + DELAY, DELAY, false), true);
+  timer.start_if_needed(START);
+  REQUIRE_EQ(timer.due(START + DELAY, DELAY, false), true);
 }
 
 // ============================================================================

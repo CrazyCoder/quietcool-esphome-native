@@ -93,13 +93,31 @@ inline bool setrouter_should_switch(bool currently_connected,
   return !(currently_connected && current_ssid == new_ssid);
 }
 
-// ── NVS flush decision ──────────────────────────────────────────────
+// ── NVS flush timer ─────────────────────────────────────────────────
 
-inline bool hx_flush_due(uint32_t dirty_since_ms, uint32_t now_ms,
-                         uint32_t delay_ms, bool ble_client_connected) {
-  return dirty_since_ms != 0 && !ble_client_connected &&
-         now_ms - dirty_since_ms >= delay_ms;
-}
+class HxFlushTimer {
+ public:
+  void start_if_needed(uint32_t now_ms) {
+    if (started_) return;
+    started_ = true;
+    started_ms_ = now_ms;
+  }
+
+  bool due(uint32_t now_ms, uint32_t delay_ms,
+           bool ble_client_connected) const {
+    return started_ && !ble_client_connected &&
+           now_ms - started_ms_ >= delay_ms;
+  }
+
+  void reset() {
+    started_ = false;
+    started_ms_ = 0;
+  }
+
+ private:
+  bool started_ = false;
+  uint32_t started_ms_ = 0;
+};
 
 // ── Idle BLE client recovery ────────────────────────────────────────
 
