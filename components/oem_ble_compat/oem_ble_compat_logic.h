@@ -119,73 +119,60 @@ class HxFlushTimer {
   uint32_t started_ms_ = 0;
 };
 
-// ── Idle BLE client recovery ────────────────────────────────────────
+// ── BLE link-health recovery ───────────────────────────────────────
 
-// Stock QuietCool firmware releases an idle BLE link after roughly 25 seconds.
-// Enforce a comparable bound so one abandoned client cannot monopolize the
-// server, and so a dropped ESP_GATTS_DISCONNECT_EVT cannot leave ESPHome's
-// client count pinned forever. Recovery is suspended during OTA because cycling
-// the BLE stack while ota.http_request is writing flash would risk disrupting
-// the update. The wrapper first asks Bluedroid to close the recorded connection;
-// if ESPHome still reports it after the grace period, the complete BLE stack
-// must be recycled to clear stale server and CCCD state.
-enum class BleIdleAction : uint8_t {
-  None,
-  CloseClient,
-  RecycleStack,
-};
-
-class BleIdleWatchdog {
+// ESPHome counts GATT clients from queued connect/disconnect events. If its
+// bounded BLE event queue drops a disconnect, that count and the CCCD state can
+// remain pinned after Bluedroid has already removed the physical link. Probe
+// Bluedroid's local connection table periodically and recycle the stack only
+// after every tracked client is confirmed absent twice. Healthy idle links are
+// never closed; stock permits authenticated clients to remain connected
+// indefinitely.
+class BleLinkHealthMonitor {
  public:
-  static constexpr uint32_t IDLE_TIMEOUT_MS = 30000;
-  static constexpr uint32_t CLOSE_GRACE_MS = 5000;
+  static constexpr uint32_t PROBE_INTERVAL_MS = 5000;
+  static constexpr uint8_t STALE_CONFIRMATIONS_REQUIRED = 2;
 
-  void note_activity(uint32_t now_ms) {
-    tracking_client_ = true;
-    close_requested_ = false;
-    last_activity_ms_ = now_ms;
+  bool probe_due(bool monitoring_enabled, bool ota_in_progress,
+                 uint8_t client_count, uint8_t tracked_count,
+                 uint32_t now_ms) {
+    if (!monitoring_enabled || ota_in_progress || client_count == 0 ||
+        tracked_count != client_count) {
+      reset();
+      return false;
+    }
+
+    if (!started_) {
+      started_ = true;
+      last_probe_ms_ = now_ms;
+      return false;
+    }
+
+    return now_ms - last_probe_ms_ >= PROBE_INTERVAL_MS;
   }
 
-  BleIdleAction update(bool oem_active, bool ota_in_progress,
-                       uint8_t client_count, uint32_t now_ms) {
-    if (!oem_active || ota_in_progress || client_count == 0) {
-      reset();
-      return BleIdleAction::None;
+  bool record_probe(uint32_t now_ms, bool all_tracked_stale) {
+    last_probe_ms_ = now_ms;
+    if (!all_tracked_stale) {
+      stale_confirmations_ = 0;
+      return false;
     }
 
-    if (!tracking_client_) {
-      tracking_client_ = true;
-      last_activity_ms_ = now_ms;
-      return BleIdleAction::None;
-    }
-
-    if (!close_requested_) {
-      if (now_ms - last_activity_ms_ < IDLE_TIMEOUT_MS)
-        return BleIdleAction::None;
-      close_requested_ = true;
-      close_requested_ms_ = now_ms;
-      return BleIdleAction::CloseClient;
-    }
-
-    if (now_ms - close_requested_ms_ < CLOSE_GRACE_MS)
-      return BleIdleAction::None;
-
-    reset();
-    return BleIdleAction::RecycleStack;
+    if (stale_confirmations_ < STALE_CONFIRMATIONS_REQUIRED)
+      ++stale_confirmations_;
+    return stale_confirmations_ >= STALE_CONFIRMATIONS_REQUIRED;
   }
 
   void reset() {
-    tracking_client_ = false;
-    close_requested_ = false;
-    last_activity_ms_ = 0;
-    close_requested_ms_ = 0;
+    started_ = false;
+    last_probe_ms_ = 0;
+    stale_confirmations_ = 0;
   }
 
  private:
-  bool tracking_client_ = false;
-  bool close_requested_ = false;
-  uint32_t last_activity_ms_ = 0;
-  uint32_t close_requested_ms_ = 0;
+  bool started_ = false;
+  uint32_t last_probe_ms_ = 0;
+  uint8_t stale_confirmations_ = 0;
 };
 
 // ── OEM field format helpers ────────────────────────────────────────

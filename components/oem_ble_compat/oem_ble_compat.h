@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include <array>
 #include <cstring>
 
 #include "esphome/core/component.h"
@@ -22,6 +23,7 @@
 #include "../fan_controller/fan_controller_logic.h"  // qc::SmartThreshold
 
 #include <esp_gap_ble_api.h>
+#include <esp_gatts_api.h>
 
 struct cJSON;  // forward — full definition in <cJSON.h>, used only in handlers
 
@@ -106,6 +108,11 @@ class OemBleCompat : public Component {
   // Re-asserts our raw OEM advertising payload whenever ESPHome rewrites the
   // structured advertisement (which re-injects the name into the scan response).
   void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param);
+  // GATT server events retain each physical peer address independently of
+  // ESPHome's queued client bookkeeping so stale entries can be verified
+  // against Bluedroid without disconnecting a healthy client.
+  void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if,
+                           esp_ble_gatts_cb_param_t *param);
 
   void setup() override;
   void loop() override;
@@ -118,8 +125,20 @@ class OemBleCompat : public Component {
   void setup_ble_service_();
   void start_service_();
   void stop_service_();
-  void run_ble_idle_watchdog_(bool oem_active, uint32_t now_ms);
+  void run_ble_link_health_check_(bool oem_active, uint32_t now_ms);
   void begin_ble_stack_recovery_();
+  struct TrackedBlePeer {
+    bool in_use = false;
+    uint16_t conn_id = 0;
+    esp_bd_addr_t remote_bda{};
+  };
+  TrackedBlePeer *find_ble_peer_(uint16_t conn_id);
+  const TrackedBlePeer *find_ble_peer_(uint16_t conn_id) const;
+  void track_ble_peer_(uint16_t conn_id, const esp_bd_addr_t remote_bda);
+  void untrack_ble_peer_(uint16_t conn_id);
+  void clear_ble_peers_();
+  uint8_t tracked_ble_client_count_(const uint16_t *clients,
+                                    uint8_t client_count) const;
   // "ATTICFAN_<mac>" + NUL, the GAP name that carries the app's scan filter.
   static constexpr size_t OEM_BLE_NAME_BUFFER_SIZE = 22;
   // Manufacturer AD payload: model digit + 25 fan-name bytes, NUL padded to a
@@ -246,7 +265,8 @@ class OemBleCompat : public Component {
   bool service_created_ = false;
   bool service_started_ = false;
   bool pending_restart_ = false;
-  ::qc::BleIdleWatchdog ble_idle_watchdog_;
+  std::array<TrackedBlePeer, USE_ESP32_BLE_MAX_CONNECTIONS> ble_peers_{};
+  ::qc::BleLinkHealthMonitor ble_link_health_monitor_;
   bool ble_recovery_pending_ = false;
 
   // Protocol state

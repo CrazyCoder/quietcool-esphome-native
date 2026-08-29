@@ -207,7 +207,7 @@ void OemBleCompat::loop() {
     pending_restart_ = false;
   }
 
-  run_ble_idle_watchdog_(want_active && service_started_, now_ms);
+  run_ble_link_health_check_(want_active && service_started_, now_ms);
   if (ble_recovery_pending_)
     return;
 
@@ -232,38 +232,54 @@ void OemBleCompat::loop() {
   }
 }
 
-void OemBleCompat::run_ble_idle_watchdog_(bool oem_active, uint32_t now_ms) {
+void OemBleCompat::run_ble_link_health_check_(bool oem_active,
+                                               uint32_t now_ms) {
   const uint8_t client_count =
       server_ != nullptr ? server_->get_client_count() : 0;
-  switch (ble_idle_watchdog_.update(oem_active, ota_in_progress_(),
-                                    client_count, now_ms)) {
-    case ::qc::BleIdleAction::None:
-      return;
+  if (client_count == 0)
+    clear_ble_peers_();
 
-    case ::qc::BleIdleAction::CloseClient: {
-      ESP_LOGI(TAG, "Closing %u idle BLE client%s",
-               static_cast<unsigned>(client_count), client_count == 1 ? "" : "s");
-      bool close_accepted = false;
-      const uint16_t *clients = server_->get_clients();
-      for (uint8_t i = 0; i < client_count; ++i) {
-        esp_err_t err =
-            esp_ble_gatts_close(server_->get_gatts_if(), clients[i]);
-        if (err == ESP_OK) {
-          close_accepted = true;
-        } else {
-          ESP_LOGW(TAG, "Could not close BLE conn_id=%u (err=0x%X)",
-                   static_cast<unsigned>(clients[i]), static_cast<unsigned>(err));
-        }
-      }
-      if (!close_accepted)
-        begin_ble_stack_recovery_();
-      return;
+  const uint16_t *clients =
+      server_ != nullptr ? server_->get_clients() : nullptr;
+  const uint8_t tracked_count =
+      clients != nullptr
+          ? tracked_ble_client_count_(clients, client_count)
+          : 0;
+  if (!ble_link_health_monitor_.probe_due(
+          oem_active, ota_in_progress_(), client_count, tracked_count,
+          now_ms)) {
+    return;
+  }
+
+  bool all_tracked_stale = true;
+  for (uint8_t i = 0; i < client_count; ++i) {
+    TrackedBlePeer *peer = find_ble_peer_(clients[i]);
+    if (peer == nullptr) {
+      all_tracked_stale = false;
+      break;
     }
 
-    case ::qc::BleIdleAction::RecycleStack:
-      ESP_LOGW(TAG, "Idle BLE client did not disconnect; recycling BLE stack");
-      begin_ble_stack_recovery_();
-      return;
+    esp_gap_conn_params_t conn_params{};
+    const esp_err_t err =
+        esp_ble_get_current_conn_params(peer->remote_bda, &conn_params);
+    if (err == ESP_OK) {
+      all_tracked_stale = false;
+    } else if (err == ESP_ERR_NOT_FOUND) {
+      ESP_LOGD(TAG, "BLE conn_id=%u is absent from Bluedroid",
+               static_cast<unsigned>(peer->conn_id));
+    } else {
+      ESP_LOGW(TAG, "Could not verify BLE conn_id=%u (err=0x%X)",
+               static_cast<unsigned>(peer->conn_id),
+               static_cast<unsigned>(err));
+      all_tracked_stale = false;
+    }
+  }
+
+  if (ble_link_health_monitor_.record_probe(now_ms,
+                                             all_tracked_stale)) {
+    ESP_LOGW(TAG,
+             "All tracked BLE clients are stale; recycling BLE stack");
+    begin_ble_stack_recovery_();
   }
 }
 
@@ -280,7 +296,8 @@ void OemBleCompat::begin_ble_stack_recovery_() {
   // characteristic's CCCD notification list. A complete stack cycle invokes
   // BLEServer::ble_before_disabled_event_handler(), which clears both.
   ESP_LOGW(TAG, "Recycling BLE stack to clear stale client state");
-  ble_idle_watchdog_.reset();
+  ble_link_health_monitor_.reset();
+  clear_ble_peers_();
   framer_.clear();
   service_started_ = false;
   pending_restart_ = false;
@@ -613,6 +630,87 @@ void OemBleCompat::gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_c
   }
 }
 
+void OemBleCompat::gatts_event_handler(
+    esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if,
+    esp_ble_gatts_cb_param_t *param) {
+  if (param == nullptr)
+    return;
+  auto *server = server_ != nullptr
+                     ? server_
+                     : esp32_ble_server::global_ble_server;
+  if (server == nullptr || gatts_if != server->get_gatts_if())
+    return;
+
+  if (event == ESP_GATTS_CONNECT_EVT) {
+    track_ble_peer_(param->connect.conn_id, param->connect.remote_bda);
+  } else if (event == ESP_GATTS_DISCONNECT_EVT) {
+    untrack_ble_peer_(param->disconnect.conn_id);
+  }
+}
+
+OemBleCompat::TrackedBlePeer *OemBleCompat::find_ble_peer_(
+    uint16_t conn_id) {
+  for (auto &peer : ble_peers_) {
+    if (peer.in_use && peer.conn_id == conn_id)
+      return &peer;
+  }
+  return nullptr;
+}
+
+const OemBleCompat::TrackedBlePeer *OemBleCompat::find_ble_peer_(
+    uint16_t conn_id) const {
+  for (const auto &peer : ble_peers_) {
+    if (peer.in_use && peer.conn_id == conn_id)
+      return &peer;
+  }
+  return nullptr;
+}
+
+void OemBleCompat::track_ble_peer_(uint16_t conn_id,
+                                   const esp_bd_addr_t remote_bda) {
+  TrackedBlePeer *peer = find_ble_peer_(conn_id);
+  if (peer == nullptr) {
+    for (auto &candidate : ble_peers_) {
+      if (!candidate.in_use) {
+        peer = &candidate;
+        break;
+      }
+    }
+  }
+  if (peer == nullptr) {
+    ESP_LOGW(TAG, "No BLE peer slot available for conn_id=%u",
+             static_cast<unsigned>(conn_id));
+    return;
+  }
+
+  peer->in_use = true;
+  peer->conn_id = conn_id;
+  memcpy(peer->remote_bda, remote_bda, ESP_BD_ADDR_LEN);
+  ble_link_health_monitor_.reset();
+}
+
+void OemBleCompat::untrack_ble_peer_(uint16_t conn_id) {
+  TrackedBlePeer *peer = find_ble_peer_(conn_id);
+  if (peer != nullptr)
+    *peer = TrackedBlePeer{};
+  ble_link_health_monitor_.reset();
+}
+
+void OemBleCompat::clear_ble_peers_() {
+  for (auto &peer : ble_peers_)
+    peer = TrackedBlePeer{};
+}
+
+uint8_t OemBleCompat::tracked_ble_client_count_(
+    const uint16_t *clients, uint8_t client_count) const {
+  uint8_t tracked_count = 0;
+  for (uint8_t i = 0; i < client_count; ++i) {
+    if (find_ble_peer_(clients[i]) != nullptr)
+      ++tracked_count;
+  }
+  return tracked_count;
+}
+
 void OemBleCompat::stop_service_() {
   if (service_ && service_started_) {
     service_->stop();
@@ -645,7 +743,6 @@ void OemBleCompat::stop_service_() {
 // ── BLE write handler ───────────────────────────────────────────────
 
 void OemBleCompat::on_ble_write_(const std::vector<uint8_t> &data) {
-  ble_idle_watchdog_.note_activity(millis());
   ESP_LOGD(TAG, "BLE write received: %u bytes", (unsigned) data.size());
   if (!framer_.feed(data.data(), data.size())) {
     ESP_LOGW(TAG, "BLE frame exceeded %u bytes without completing — buffer dropped",

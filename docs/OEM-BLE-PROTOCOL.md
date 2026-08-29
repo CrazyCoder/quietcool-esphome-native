@@ -852,14 +852,17 @@ enters pair mode only via a physical KEY2 press on the device, and `PairMode` (A
 auth-gated, so an in-range stranger can't pair themselves remotely (the physical button is
 the trust boundary — treating A=15 as pre-auth would be a remote-pairing hole).
 
-The component closes an idle OEM BLE client after 30 seconds, matching stock's
-bounded-session behavior. If the connection remains registered for another 5 seconds
-(for example, because ESPHome dropped the disconnect event while its BLE event queue
-was full), it recycles the BLE stack to clear stale server and notification state,
-then resumes advertising automatically. The idle watchdog is suspended from OTA
-acceptance until failure or the successful reboot, so it cannot recycle the radio
-while `ota.http_request` is writing flash. NVS write-through is also deferred while
-a BLE client is connected so a synchronous flash commit cannot block BLE event
+The component leaves healthy idle BLE clients connected indefinitely, matching
+stock behavior for authenticated sessions. It retains each GATT connection's
+peer address and periodically checks Bluedroid's local connection table without
+sending anything over the air. If ESPHome still counts clients after **every**
+tracked physical link is absent for two consecutive checks, it recycles the BLE
+stack to clear stale server and notification state, then resumes advertising
+automatically. A stale entry cannot trigger a whole-stack recycle while another
+tracked client remains live. Link recovery is suspended from OTA acceptance
+until failure or the successful reboot, so it cannot recycle the radio while
+`ota.http_request` is writing flash. NVS write-through is also deferred while a
+BLE client is connected so a synchronous flash commit cannot block BLE event
 handling.
 
 Where it **deliberately diverges** from stock:

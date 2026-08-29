@@ -1,5 +1,5 @@
 // Host-side unit tests for OemBleCompatLogic — pair-state machine, gate
-// checks, NVS flush gating, idle recovery, field conversions, and framing.
+// checks, NVS flush gating, BLE link recovery, field conversions, and framing.
 //
 // Compile + run:
 //   g++ -std=c++17 -I.. test_oem_ble_compat_logic.cpp -o test_oem_ble_compat_logic.exe
@@ -35,14 +35,6 @@ inline std::ostream &operator<<(std::ostream &os, UpgradeDecision d) {
     case UpgradeDecision::Reject:           return os << "Reject";
     case UpgradeDecision::BlockedOemDomain: return os << "BlockedOemDomain";
     case UpgradeDecision::Flash:            return os << "Flash";
-  }
-  return os << "?";
-}
-inline std::ostream &operator<<(std::ostream &os, BleIdleAction action) {
-  switch (action) {
-    case BleIdleAction::None:         return os << "None";
-    case BleIdleAction::CloseClient:  return os << "CloseClient";
-    case BleIdleAction::RecycleStack: return os << "RecycleStack";
   }
   return os << "?";
 }
@@ -184,85 +176,111 @@ TEST("setrouter_should_switch: switch when disconnected (recovery)") {
 }
 
 // ============================================================================
-// 4c. Idle BLE client recovery
+// 4c. BLE link-health recovery
 // ============================================================================
 
-TEST("BLE idle watchdog starts timing when a client appears") {
-  BleIdleWatchdog watchdog;
-  REQUIRE_EQ(watchdog.update(true, false, 1, 1000), BleIdleAction::None);
-  REQUIRE_EQ(watchdog.update(true, false, 1, 1000 + BleIdleWatchdog::IDLE_TIMEOUT_MS - 1),
-             BleIdleAction::None);
-  REQUIRE_EQ(watchdog.update(true, false, 1, 1000 + BleIdleWatchdog::IDLE_TIMEOUT_MS),
-             BleIdleAction::CloseClient);
+TEST("BLE link monitor waits one interval before probing") {
+  BleLinkHealthMonitor monitor;
+  REQUIRE(!monitor.probe_due(true, false, 1, 1, 1000));
+  REQUIRE(!monitor.probe_due(
+      true, false, 1, 1,
+      1000 + BleLinkHealthMonitor::PROBE_INTERVAL_MS - 1));
+  REQUIRE(monitor.probe_due(
+      true, false, 1, 1,
+      1000 + BleLinkHealthMonitor::PROBE_INTERVAL_MS));
 }
 
-TEST("BLE activity restarts the idle timeout") {
-  BleIdleWatchdog watchdog;
-  REQUIRE_EQ(watchdog.update(true, false, 1, 1000), BleIdleAction::None);
-  watchdog.note_activity(20000);
-  REQUIRE_EQ(watchdog.update(true, false, 1, 20000 + BleIdleWatchdog::IDLE_TIMEOUT_MS - 1),
-             BleIdleAction::None);
-  REQUIRE_EQ(watchdog.update(true, false, 1, 20000 + BleIdleWatchdog::IDLE_TIMEOUT_MS),
-             BleIdleAction::CloseClient);
+TEST("BLE link monitor never recycles a healthy idle client") {
+  BleLinkHealthMonitor monitor;
+  REQUIRE(!monitor.probe_due(true, false, 1, 1, 1000));
+  constexpr uint32_t FIRST_PROBE =
+      1000 + BleLinkHealthMonitor::PROBE_INTERVAL_MS;
+  REQUIRE(monitor.probe_due(true, false, 1, 1, FIRST_PROBE));
+  REQUIRE(!monitor.record_probe(FIRST_PROBE, false));
+  REQUIRE(monitor.probe_due(
+      true, false, 1, 1,
+      FIRST_PROBE + BleLinkHealthMonitor::PROBE_INTERVAL_MS));
+  REQUIRE(!monitor.record_probe(
+      FIRST_PROBE + BleLinkHealthMonitor::PROBE_INTERVAL_MS, false));
 }
 
-TEST("BLE idle watchdog recycles only if close does not clear the client") {
-  BleIdleWatchdog watchdog;
-  REQUIRE_EQ(watchdog.update(true, false, 1, 1000), BleIdleAction::None);
-  REQUIRE_EQ(watchdog.update(true, false, 1, 1000 + BleIdleWatchdog::IDLE_TIMEOUT_MS),
-             BleIdleAction::CloseClient);
-  REQUIRE_EQ(watchdog.update(true, false, 1,
-                             1000 + BleIdleWatchdog::IDLE_TIMEOUT_MS +
-                                 BleIdleWatchdog::CLOSE_GRACE_MS - 1),
-             BleIdleAction::None);
-  REQUIRE_EQ(watchdog.update(true, false, 1,
-                             1000 + BleIdleWatchdog::IDLE_TIMEOUT_MS +
-                                 BleIdleWatchdog::CLOSE_GRACE_MS),
-             BleIdleAction::RecycleStack);
+TEST("BLE link monitor requires two all-stale probes") {
+  BleLinkHealthMonitor monitor;
+  REQUIRE(!monitor.probe_due(true, false, 2, 2, 1000));
+  constexpr uint32_t FIRST_PROBE =
+      1000 + BleLinkHealthMonitor::PROBE_INTERVAL_MS;
+  REQUIRE(monitor.probe_due(true, false, 2, 2, FIRST_PROBE));
+  REQUIRE(!monitor.record_probe(FIRST_PROBE, true));
+  constexpr uint32_t SECOND_PROBE =
+      FIRST_PROBE + BleLinkHealthMonitor::PROBE_INTERVAL_MS;
+  REQUIRE(monitor.probe_due(true, false, 2, 2, SECOND_PROBE));
+  REQUIRE(monitor.record_probe(SECOND_PROBE, true));
 }
 
-TEST("BLE disconnect cancels pending stack recovery") {
-  BleIdleWatchdog watchdog;
-  REQUIRE_EQ(watchdog.update(true, false, 1, 1000), BleIdleAction::None);
-  REQUIRE_EQ(watchdog.update(true, false, 1, 1000 + BleIdleWatchdog::IDLE_TIMEOUT_MS),
-             BleIdleAction::CloseClient);
-  REQUIRE_EQ(watchdog.update(true, false, 0, 1000 + BleIdleWatchdog::IDLE_TIMEOUT_MS + 1),
-             BleIdleAction::None);
-  REQUIRE_EQ(watchdog.update(true, false, 0,
-                             1000 + BleIdleWatchdog::IDLE_TIMEOUT_MS +
-                                 BleIdleWatchdog::CLOSE_GRACE_MS),
-             BleIdleAction::None);
+TEST("BLE link monitor preserves live peers when another peer is stale") {
+  BleLinkHealthMonitor monitor;
+  REQUIRE(!monitor.probe_due(true, false, 2, 2, 1000));
+  constexpr uint32_t FIRST_PROBE =
+      1000 + BleLinkHealthMonitor::PROBE_INTERVAL_MS;
+  REQUIRE(monitor.probe_due(true, false, 2, 2, FIRST_PROBE));
+  REQUIRE(!monitor.record_probe(FIRST_PROBE, true));
+  constexpr uint32_t MIXED_PROBE =
+      FIRST_PROBE + BleLinkHealthMonitor::PROBE_INTERVAL_MS;
+  REQUIRE(monitor.probe_due(true, false, 2, 2, MIXED_PROBE));
+  REQUIRE(!monitor.record_probe(MIXED_PROBE, false));
+  constexpr uint32_t NEXT_STALE_PROBE =
+      MIXED_PROBE + BleLinkHealthMonitor::PROBE_INTERVAL_MS;
+  REQUIRE(monitor.probe_due(true, false, 2, 2, NEXT_STALE_PROBE));
+  REQUIRE(!monitor.record_probe(NEXT_STALE_PROBE, true));
 }
 
-TEST("BLE watchdog is disabled while OEM BLE yields to Improv") {
-  BleIdleWatchdog watchdog;
-  REQUIRE_EQ(watchdog.update(true, false, 1, 1000), BleIdleAction::None);
-  REQUIRE_EQ(watchdog.update(false, false, 1, 1000 + BleIdleWatchdog::IDLE_TIMEOUT_MS),
-             BleIdleAction::None);
-  REQUIRE_EQ(watchdog.update(true, false, 1, 1000 + BleIdleWatchdog::IDLE_TIMEOUT_MS + 1),
-             BleIdleAction::None);
+TEST("BLE link monitor requires complete conn-id tracking") {
+  BleLinkHealthMonitor monitor;
+  REQUIRE(!monitor.probe_due(true, false, 2, 1, 1000));
+  REQUIRE(!monitor.probe_due(
+      true, false, 2, 1,
+      1000 + BleLinkHealthMonitor::PROBE_INTERVAL_MS));
+  REQUIRE(!monitor.probe_due(true, false, 2, 2, 10000));
+  REQUIRE(monitor.probe_due(
+      true, false, 2, 2,
+      10000 + BleLinkHealthMonitor::PROBE_INTERVAL_MS));
 }
 
-TEST("BLE watchdog is suspended during OTA") {
-  BleIdleWatchdog watchdog;
-  REQUIRE_EQ(watchdog.update(true, false, 1, 1000), BleIdleAction::None);
-  REQUIRE_EQ(watchdog.update(true, true, 1,
-                             1000 + BleIdleWatchdog::IDLE_TIMEOUT_MS),
-             BleIdleAction::None);
-  REQUIRE_EQ(watchdog.update(true, false, 1,
-                             1000 + BleIdleWatchdog::IDLE_TIMEOUT_MS + 1),
-             BleIdleAction::None);
-  REQUIRE_EQ(watchdog.update(true, false, 1,
-                             1000 + 2 * BleIdleWatchdog::IDLE_TIMEOUT_MS + 1),
-             BleIdleAction::CloseClient);
+TEST("BLE link monitor resets after all clients disconnect") {
+  BleLinkHealthMonitor monitor;
+  REQUIRE(!monitor.probe_due(true, false, 1, 1, 1000));
+  constexpr uint32_t FIRST_PROBE =
+      1000 + BleLinkHealthMonitor::PROBE_INTERVAL_MS;
+  REQUIRE(monitor.probe_due(true, false, 1, 1, FIRST_PROBE));
+  REQUIRE(!monitor.record_probe(FIRST_PROBE, true));
+  REQUIRE(!monitor.probe_due(true, false, 0, 0, FIRST_PROBE + 1));
+  REQUIRE(!monitor.probe_due(true, false, 1, 1, FIRST_PROBE + 2));
+  constexpr uint32_t RECONNECTED_PROBE =
+      FIRST_PROBE + 2 + BleLinkHealthMonitor::PROBE_INTERVAL_MS;
+  REQUIRE(monitor.probe_due(true, false, 1, 1, RECONNECTED_PROBE));
+  REQUIRE(!monitor.record_probe(RECONNECTED_PROBE, true));
 }
 
-TEST("BLE idle timeout handles millis wraparound") {
-  BleIdleWatchdog watchdog;
+TEST("BLE link monitor is suspended during OTA and Improv handoff") {
+  BleLinkHealthMonitor monitor;
+  REQUIRE(!monitor.probe_due(true, false, 1, 1, 1000));
+  REQUIRE(!monitor.probe_due(
+      true, true, 1, 1,
+      1000 + BleLinkHealthMonitor::PROBE_INTERVAL_MS));
+  REQUIRE(!monitor.probe_due(true, false, 1, 1, 10000));
+  REQUIRE(!monitor.probe_due(
+      false, false, 1, 1,
+      10000 + BleLinkHealthMonitor::PROBE_INTERVAL_MS));
+  REQUIRE(!monitor.probe_due(true, false, 1, 1, 20000));
+}
+
+TEST("BLE link probe interval handles millis wraparound") {
+  BleLinkHealthMonitor monitor;
   constexpr uint32_t START = 0xFFFFFF00U;
-  REQUIRE_EQ(watchdog.update(true, false, 1, START), BleIdleAction::None);
-  REQUIRE_EQ(watchdog.update(true, false, 1, START + BleIdleWatchdog::IDLE_TIMEOUT_MS),
-             BleIdleAction::CloseClient);
+  REQUIRE(!monitor.probe_due(true, false, 1, 1, START));
+  REQUIRE(monitor.probe_due(
+      true, false, 1, 1,
+      START + BleLinkHealthMonitor::PROBE_INTERVAL_MS));
 }
 
 // ============================================================================

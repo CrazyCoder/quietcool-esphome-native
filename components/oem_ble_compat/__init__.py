@@ -101,6 +101,9 @@ async def to_code(config):
     # restart (see OemBleCompat::gap_event_handler).
     ble_parent = await cg.get_variable(config[esp32_ble.CONF_BLE_ID])
     esp32_ble.register_gap_event_handler(ble_parent, var)
+    # Retain conn_id -> peer-address mappings so stale ESPHome client entries
+    # can be checked against Bluedroid without closing healthy idle links.
+    esp32_ble.register_gatts_event_handler(ble_parent, var)
 
     fc = await cg.get_variable(config[CONF_FAN_CONTROLLER_ID])
     cg.add(var.set_fan_controller(fc))
