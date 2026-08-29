@@ -164,11 +164,16 @@ On first boot after flashing over OEM firmware, existing presets are imported fr
 | `button.<device>_factory_reset` | **Factory reset from HA** — clears Wi-Fi credentials and ESPHome preferences, preserves OEM pairings/presets/settings, and reboots into Improv-BLE for re-onboarding. Same effect as the KEY1 ≥ 5 s hold. |
 | `button.<device>_restore_stock_firmware` | Pull the verified OEM V4.1 image, preserve OEM NVS state, and reboot into stock firmware. |
 | `button.<device>_reset_watchdog` | Clears the 24h runtime watchdog or over-temp trip. Required to re-enable Smart Mode after a safety event. |
+| `button.<device>_reset_ble_stack` | Restart Bluetooth without rebooting the controller. This disconnects active Smart Control and Improv clients. The button is enabled by default and refuses to run during OTA. |
 | `binary_sensor.<device>_watchdog_tripped` | True when the 24h continuous runtime watchdog or over-temp safety has tripped. Clears via the Reset Watchdog button. |
 | `binary_sensor.<device>_improv_ble_advertising` | True while the device is advertising Improv-BLE for Wi-Fi re-onboarding. |
 | `sensor.<device>_ble_paired_devices` | Number of BLE pair-ids currently stored in NVS (max 50). Updates on pair/clear. |
 | `switch.<device>_ble_pair_mode` | Toggle BLE pairing mode. Auto-turns OFF after 2 min timeout or when a device pairs successfully. Same effect as KEY2 short-press (OEM parity). |
 | `button.<device>_clear_ble_pairings` | Wipe all stored BLE pair-ids from NVS. Existing Smart Control app clients must re-pair afterward. |
+| `sensor.<device>_ble_active_clients` | ESPHome's current BLE client count. A non-zero value when no phone is connected can identify stale client state. |
+| `sensor.<device>_ble_stack_resets` | Full BLE stack resets since the last controller boot. |
+| `text_sensor.<device>_ble_advertising_status` | Last advertising start or stop result, including the ESP-IDF status code after a failure. |
+| `text_sensor.<device>_ble_last_reset_reason` | Reason for the last automatic or manual BLE stack reset. |
 | `update.<device>_firmware` | New project releases for shared factory builds. Install from HA or from the local web UI; adopted Device Builder builds intentionally omit this generic updater. |
 | `text_sensor.<device>_mac_wi_fi` | Wi-Fi MAC address. |
 | `text_sensor.<device>_mac_ble` | BLE MAC address (differs from Wi-Fi MAC by +2 on ESP32). |
@@ -400,6 +405,7 @@ The firmware layers multiple independent recovery paths so a single failure mode
 | What's broken | Recovery |
 |---|---|
 | **Wi-Fi unreachable** (moved house, AP password changed, wrong SSID) | KEY2 hold **3 – 5 s** → starts Improv-BLE for 5 min (LED4 VeryFast). Re-onboard via the Web Installer or any Improv-compatible phone app. **No gesture needed, though:** the WiFi component auto-starts *both* `esp32_improv` and the captive portal **~90 s after the last good connection drops** (`ap_timeout: 90s`; this fires on a runtime loss, not just at boot). Alternatives: the fallback Wi-Fi AP **`QuietCool Setup`** (captive portal) comes up at that same 90 s mark — connect a phone to it and open the captive page; or the companion `qc-ble` CLI (published separately) — `qc-ble provision-wifi` over BLE from a laptop/desktop with a USB HCI dongle (live-switches Wi-Fi at runtime — no reboot — and keeps BLE up so you can retry creds immediately). If Wi-Fi stays down 15 min the device reboots and the 90 s recovery timers simply re-arm. |
+| **Smart Control cannot connect while HA still works** | Press **Reset BLE Stack** in HA. This restarts Bluetooth without rebooting the controller or changing fan state. Active Smart Control and Improv clients disconnect. |
 | **`Smart Control (BLE)` got turned OFF** and HA is unreachable, so you can't turn it back on | KEY2 **short press** (< 3 s) → re-enables `Smart Control (BLE)` and enters pair mode. **LED4 SlowBlink confirms it blind.** This press is inert when BLE is already on (it falls through to its normal pair-mode toggle). |
 | **`Smart Control (BLE)` got turned OFF *and* Wi-Fi is broken** (the worst case — no HA, no physical access) | Automatic — ESPHome itself brings up two recovery paths ~90 s after STA fails, on different radios: the **`QuietCool Setup` captive portal AP** (join from a phone, the captive page re-enters Wi-Fi creds; iOS needs Settings → Wi-Fi) and **Improv-BLE** (the WiFi component auto-starts `esp32_improv` at the 90 s `ap_timeout` — re-onboard via the Web Installer or any Improv-compatible phone app). Either is sufficient. The OEM BLE protocol surface stays off in this case (Improv and OEM BLE can't coexist on one advert), but it's not needed for recovery — once Wi-Fi is restored, HA can flip `Smart Control (BLE)` back on. |
 | **Firmware crash-loops on boot** | Automatic — after 10 consecutive failed boots, ESPHome enters safe mode (Wi-Fi + OTA only) on its own. No gesture needed. From there, push a fixed firmware image over OTA. |
@@ -407,6 +413,11 @@ The firmware layers multiple independent recovery paths so a single failure mode
 | **Lost BLE pairing**, or stock app says *"device memory full"* | `button.<device>_clear_ble_pairings` in HA wipes just the pair-id list. KEY1 hold **≥ 5 s** performs a Wi-Fi/ESPHome factory reset and reboots into Improv, but deliberately preserves the OEM pair-id list and presets; use **Clear BLE Pairings** when those must also be removed. |
 | **Need to roll back to stock OEM firmware** | See [Going back to stock](#going-back-to-stock) below. HA and physical-button restores use the verified CDN image; the hub's own `/restore-stock` page can use a firmware URL or upload any locally saved OEM application image directly over the LAN. The Web Installer links to that local page; UART remains the universal offline fallback. |
 | **Need to push a fresh firmware image** | Any OTA path in [Updating a running hub](#updating-a-hub-already-running-this-firmware) — `esphome run`, the dashboard, HTTP flash, or BLE. From HA, the **Safe Mode** button is helpful if the current firmware is unstable. Worst case: UART reflash (BOOT pin held LOW, `esptool write-flash` to `0x20000` or `0x200000`) — always works. |
+
+If BLE stops repeatedly, schedule `button.press` for
+`button.<device>_reset_ble_stack` during a quiet period. Include **BLE Active
+Clients**, **BLE Advertising Status**, **BLE Stack Resets**, **BLE Last Reset
+Reason**, and the advertising status log lines in the failure report.
 
 **Why the layering matters.** The 10× auto-safe-mode is a hard, no-touch backstop: even if every gesture is unreachable (e.g., the enclosure is sealed), a fixable crash-loop self-rescues into a flashable state. The captive portal AP works without a phone-paired prior history. Improv-BLE works without any prior Wi-Fi. The dual-button stock-restore is intentionally 10 s (vs 5 s for single-button gestures) so a one-handed grab can't trigger it. Local OEM upload removes the dependency on QuietCool retaining a particular firmware URL, but still needs the hub's LAN web server. **UART is the universal offline backstop:** when the network and running firmware are both unavailable, UART always works.
 

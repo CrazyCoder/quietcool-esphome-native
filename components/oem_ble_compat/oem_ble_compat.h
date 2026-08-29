@@ -18,6 +18,7 @@
 #include "esphome/components/text/text.h"
 #include "esphome/components/text_sensor/text_sensor.h"
 #include "esphome/components/http_request/ota/ota_http_request.h"
+#include "esphome/components/ota/ota_backend.h"
 
 #include "oem_ble_compat_logic.h"
 #include "../fan_controller/fan_controller_logic.h"  // qc::SmartThreshold
@@ -36,7 +37,7 @@ namespace quietcool {
 
 class FanController;  // forward — avoids circular includes
 
-class OemBleCompat : public Component {
+class OemBleCompat : public Component, public ota::OTAGlobalStateListener {
  public:
   void set_fan_controller(FanController *fc) { fan_ = fc; }
   // The enable switch is pure USER INTENT ("I want Smart Control available").
@@ -66,6 +67,18 @@ class OemBleCompat : public Component {
   void set_default_run_number(number::Number *n) { default_run_number_ = n; }
   void set_smart_mode_status(text_sensor::TextSensor *s) { smart_mode_status_ = s; }
 
+  void set_ble_active_clients_sensor(sensor::Sensor *s) {
+    ble_active_clients_sensor_ = s;
+  }
+  void set_ble_stack_resets_sensor(sensor::Sensor *s) {
+    ble_stack_resets_sensor_ = s;
+  }
+  void set_ble_advertising_status(text_sensor::TextSensor *s) {
+    ble_advertising_status_ = s;
+  }
+  void set_ble_last_reset_reason(text_sensor::TextSensor *s) {
+    ble_last_reset_reason_ = s;
+  }
   // Fan info entities (editable from HA, synced with OEM BLE).
   void set_fan_name_text(text::Text *t) { fan_name_text_ = t; }
   void set_fan_model_select(select::Select *s) { fan_model_select_ = s; }
@@ -88,6 +101,9 @@ class OemBleCompat : public Component {
 
   void set_pair_count_sensor(sensor::Sensor *s) { pair_count_sensor_ = s; }
   void publish_pair_count_();
+  // HA-facing recovery for BLE failures that cannot be classified remotely.
+  // A full stack cycle disconnects every Smart Control and Improv client.
+  void reset_ble_stack();
 
   // Preset CRUD — exposed as HA actions.
   void set_preset_select(select::Select *s) { preset_select_ = s; }
@@ -113,6 +129,8 @@ class OemBleCompat : public Component {
   // against Bluedroid without disconnecting a healthy client.
   void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if,
                            esp_ble_gatts_cb_param_t *param);
+  void on_ota_global_state(ota::OTAState state, float progress, uint8_t error,
+                           ota::OTAComponent *component) override;
 
   void setup() override;
   void loop() override;
@@ -126,7 +144,9 @@ class OemBleCompat : public Component {
   void start_service_();
   void stop_service_();
   void run_ble_link_health_check_(bool oem_active, uint32_t now_ms);
-  void begin_ble_stack_recovery_();
+  void begin_ble_stack_recovery_(const char *reason);
+  void publish_ble_active_clients_();
+  void publish_ble_advertising_status_(const char *event, int status);
   struct TrackedBlePeer {
     bool in_use = false;
     uint16_t conn_id = 0;
@@ -253,6 +273,10 @@ class OemBleCompat : public Component {
   number::Number *default_run_number_ = nullptr;
   text_sensor::TextSensor *smart_mode_status_ = nullptr;
   sensor::Sensor *pair_count_sensor_ = nullptr;
+  sensor::Sensor *ble_active_clients_sensor_ = nullptr;
+  sensor::Sensor *ble_stack_resets_sensor_ = nullptr;
+  text_sensor::TextSensor *ble_advertising_status_ = nullptr;
+  text_sensor::TextSensor *ble_last_reset_reason_ = nullptr;
   text::Text *fan_name_text_ = nullptr;
   select::Select *fan_model_select_ = nullptr;
   text::Text *fan_serial_text_ = nullptr;
@@ -268,13 +292,17 @@ class OemBleCompat : public Component {
   std::array<TrackedBlePeer, USE_ESP32_BLE_MAX_CONNECTIONS> ble_peers_{};
   ::qc::BleLinkHealthMonitor ble_link_health_monitor_;
   bool ble_recovery_pending_ = false;
+  bool ota_active_ = false;
+  int last_adv_start_status_ = -1;
+  uint32_t ble_stack_reset_count_ = 0;
 
   // Protocol state
   ::qc::PairMachine pair_machine_;
   ::qc::FrameAssembler framer_;
   uint8_t upgrade_state_ = ::qc::UPGRADE_STATE_IDLE;  // A=5 GetUpgradeState feedback
   bool ota_in_progress_() const {
-    return upgrade_state_ == ::qc::UPGRADE_STATE_DOWNLOADING;
+    return ota_active_ ||
+           upgrade_state_ == ::qc::UPGRADE_STATE_DOWNLOADING;
   }
   std::string upgrade_url_;                           // captured for the deferred flash
   int upgrade_flash_retries_ = 0;

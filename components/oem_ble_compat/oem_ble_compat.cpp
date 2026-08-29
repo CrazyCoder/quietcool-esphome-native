@@ -117,7 +117,12 @@ void OemBleCompat::setup() {
     presets_ = PresetStorage{};
 
   server_ = esp32_ble_server::global_ble_server;
+  ota::get_global_ota_callback()->add_global_state_listener(this);
   publish_pair_count_();
+  publish_ble_active_clients_();
+  if (ble_stack_resets_sensor_) ble_stack_resets_sensor_->publish_state(0);
+  if (ble_advertising_status_) ble_advertising_status_->publish_state("No event yet");
+  if (ble_last_reset_reason_) ble_last_reset_reason_->publish_state("None");
 
   // Publish initial fan info to HA entities (guard suppresses on_value feedback).
   syncing_fan_info_ = true;
@@ -179,6 +184,7 @@ void OemBleCompat::loop() {
     ble_recovery_pending_ = false;
     ESP_LOGI(TAG, "BLE stack recovery completed");
   }
+  publish_ble_active_clients_();
 
   const uint32_t now_ms = millis();
   bool want_active = want_active_();
@@ -278,11 +284,25 @@ void OemBleCompat::run_ble_link_health_check_(bool oem_active,
                                              all_tracked_stale)) {
     ESP_LOGW(TAG,
              "All tracked BLE clients are stale; recycling BLE stack");
-    begin_ble_stack_recovery_();
+    begin_ble_stack_recovery_("Stale client state");
   }
 }
 
-void OemBleCompat::begin_ble_stack_recovery_() {
+void OemBleCompat::reset_ble_stack() {
+  const uint8_t client_count =
+      server_ != nullptr ? server_->get_client_count() : 0;
+  ESP_LOGW(TAG,
+           "Manual BLE stack reset requested: clients=%u "
+           "last_adv_start_status=%d",
+           static_cast<unsigned>(client_count), last_adv_start_status_);
+  if (ota_in_progress_()) {
+    ESP_LOGW(TAG, "Manual BLE stack reset blocked while OTA is active");
+    return;
+  }
+  begin_ble_stack_recovery_("Manual HA request");
+}
+
+void OemBleCompat::begin_ble_stack_recovery_(const char *reason) {
   if (ble_recovery_pending_)
     return;
   auto *ble = esp32_ble::global_ble;
@@ -291,10 +311,22 @@ void OemBleCompat::begin_ble_stack_recovery_() {
     return;
   }
 
+  const uint8_t client_count =
+      server_ != nullptr ? server_->get_client_count() : 0;
+  ++ble_stack_reset_count_;
+  if (ble_stack_resets_sensor_)
+    ble_stack_resets_sensor_->publish_state(ble_stack_reset_count_);
+  if (ble_last_reset_reason_)
+    ble_last_reset_reason_->publish_state(reason);
+  ESP_LOGW(TAG,
+           "Recycling BLE stack: reason=%s clients=%u "
+           "last_adv_start_status=%d",
+           reason, static_cast<unsigned>(client_count),
+           last_adv_start_status_);
+
   // A service stop/start does not clear BLEServer::client_count_ or the
   // characteristic's CCCD notification list. A complete stack cycle invokes
   // BLEServer::ble_before_disabled_event_handler(), which clears both.
-  ESP_LOGW(TAG, "Recycling BLE stack to clear stale client state");
   ble_link_health_monitor_.reset();
   clear_ble_peers_();
   framer_.clear();
@@ -609,23 +641,32 @@ void OemBleCompat::apply_oem_raw_adv_() {
   esp_ble_gap_config_scan_rsp_data_raw(scanrsp, s);
 }
 
-void OemBleCompat::gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param) {
-  // Re-assert our raw payloads on every advertising (re)start: ESPHome rebuilds
-  // its structured advertisement on connection teardown, and a full BLE
-  // disable/enable (Improv handoff) clears the controller's data outright.
-  // Guarded by service_started_ so we never touch Improv's own advertisement
-  // (Improv advertises while OEM BLE is stopped).
-  //
-  // This still leaves a brief window right after a teardown where ESPHome's own
-  // packet is on air: BLEAdvertising::start() calls esp_ble_gap_config_adv_data
-  // and esp_ble_gap_start_advertising back to back, so advertising begins before
-  // any GAP event we can hook. In that window byte 5 is the 'A' of ATTICFAN, so
-  // a scan landing there reads the generic photo until the next report. Closing
-  // it needs ESPHome's structured path gone, not raced: bluedroid emits AD
-  // structures in a fixed order (flags, appearance, name, manufacturer, TX
-  // power), so a structured packet can never carry the model byte at offset 5.
-  if (event == ESP_GAP_BLE_ADV_START_COMPLETE_EVT && service_started_) {
-    apply_oem_raw_adv_();
+void OemBleCompat::gap_event_handler(esp_gap_ble_cb_event_t event,
+                                     esp_ble_gap_cb_param_t *param) {
+  if (param == nullptr)
+    return;
+
+  if (event == ESP_GAP_BLE_ADV_START_COMPLETE_EVT) {
+    const int status = param->adv_start_cmpl.status;
+    last_adv_start_status_ = status;
+    publish_ble_advertising_status_("Started", status);
+    if (status == ESP_BT_STATUS_SUCCESS) {
+      ESP_LOGI(TAG, "BLE advertising start completed: status=%d", status);
+      // Re-assert our raw payloads after ESPHome rebuilds its structured
+      // advertisement on connection teardown or a full BLE stack cycle.
+      if (service_started_)
+        apply_oem_raw_adv_();
+    } else {
+      ESP_LOGW(TAG, "BLE advertising start failed: status=%d", status);
+    }
+  } else if (event == ESP_GAP_BLE_ADV_STOP_COMPLETE_EVT) {
+    const int status = param->adv_stop_cmpl.status;
+    publish_ble_advertising_status_("Stopped", status);
+    if (status == ESP_BT_STATUS_SUCCESS) {
+      ESP_LOGI(TAG, "BLE advertising stop completed: status=%d", status);
+    } else {
+      ESP_LOGW(TAG, "BLE advertising stop failed: status=%d", status);
+    }
   }
 }
 
@@ -645,6 +686,49 @@ void OemBleCompat::gatts_event_handler(
   } else if (event == ESP_GATTS_DISCONNECT_EVT) {
     untrack_ble_peer_(param->disconnect.conn_id);
   }
+}
+
+void OemBleCompat::on_ota_global_state(
+    ota::OTAState state, float progress, uint8_t error,
+    ota::OTAComponent *component) {
+  (void) progress;
+  (void) error;
+  (void) component;
+  switch (state) {
+    case ota::OTA_STARTED:
+    case ota::OTA_IN_PROGRESS:
+      ota_active_ = true;
+      break;
+    case ota::OTA_COMPLETED:
+    case ota::OTA_ABORT:
+    case ota::OTA_ERROR:
+      ota_active_ = false;
+      break;
+  }
+}
+
+void OemBleCompat::publish_ble_active_clients_() {
+  if (!ble_active_clients_sensor_)
+    return;
+  const float client_count =
+      server_ != nullptr ? server_->get_client_count() : 0;
+  if (!ble_active_clients_sensor_->has_state() ||
+      ble_active_clients_sensor_->state != client_count) {
+    ble_active_clients_sensor_->publish_state(client_count);
+  }
+}
+
+void OemBleCompat::publish_ble_advertising_status_(const char *event,
+                                                    int status) {
+  if (!ble_advertising_status_)
+    return;
+  if (status == ESP_BT_STATUS_SUCCESS) {
+    ble_advertising_status_->publish_state(event);
+    return;
+  }
+  char value[48];
+  snprintf(value, sizeof(value), "%s failed (%d)", event, status);
+  ble_advertising_status_->publish_state(value);
 }
 
 OemBleCompat::TrackedBlePeer *OemBleCompat::find_ble_peer_(

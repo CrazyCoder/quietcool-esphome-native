@@ -364,6 +364,27 @@ sensor:
     entity_category: diagnostic
     update_interval: never
 
+  # Current ESPHome BLE server bookkeeping. A non-zero value with no physical
+  # BLE link is evidence of a lost disconnect event.
+  - platform: template
+    name: "BLE Active Clients"
+    id: ble_active_clients
+    icon: mdi:bluetooth-connect
+    accuracy_decimals: 0
+    state_class: measurement
+    entity_category: diagnostic
+    update_interval: never
+
+  # In-memory count since boot of automatic and manual full BLE stack cycles.
+  - platform: template
+    name: "BLE Stack Resets"
+    id: ble_stack_resets
+    icon: mdi:restart-alert
+    accuracy_decimals: 0
+    state_class: measurement
+    entity_category: diagnostic
+    update_interval: never
+
 # --- DIP-switch read (GPIO 13/14/21, pulled up, encodes wiring scheme).
 # Kept `internal: true` — exposed only through the speeds_available sensor. ---
 binary_sensor:
@@ -544,11 +565,22 @@ button:
     on_press:
       - lambda: 'id(attic_fan).reset_watchdog();'
 
+  # Full Bluetooth host/controller cycle for rare cases where Smart Control
+  # stops accepting connections. This disconnects every BLE and Improv client
+  # but leaves Wi-Fi, fan control, and the ESP32 running.
+  - platform: template
+    name: "Reset BLE Stack"
+    icon: mdi:bluetooth-connect
+    entity_category: diagnostic
+    on_press:
+      - lambda: 'id(oem_ble).reset_ble_stack();'
+
   # Factory reset — wipe the ESPHome NVS namespace and reboot. With Wi-Fi
   # creds gone, Improv-BLE auto-advertises on next boot for re-onboarding.
   # Owns its full reboot sequence (matching `Restore Stock Firmware` below)
   # so the KEY1 long-hold gesture just presses it. `delay` lets the WARN
   # line flush + the NVS erase settle before the reboot.
+
   - platform: template
     id: factory_reset
     name: "Factory Reset"
@@ -671,6 +703,21 @@ text_sensor:
     name: "MAC (BLE)"
     id: ble_mac
     icon: mdi:bluetooth
+    entity_category: diagnostic
+    update_interval: never
+
+  # Last advertising completion event and the reason for the last full stack
+  # reset. Both are in-memory diagnostics for BLE failure reports.
+  - platform: template
+    name: "BLE Advertising Status"
+    id: ble_advertising_status
+    icon: mdi:bluetooth
+    entity_category: diagnostic
+    update_interval: never
+  - platform: template
+    name: "BLE Last Reset Reason"
+    id: ble_last_reset_reason
+    icon: mdi:restart-alert
     entity_category: diagnostic
     update_interval: never
 
@@ -1305,6 +1352,10 @@ oem_ble_compat:
   default_run_minutes_number: default_run_time
   smart_mode_status: smart_mode_status
   pair_count_sensor: ble_pair_count
+  ble_active_clients_sensor: ble_active_clients
+  ble_stack_resets_sensor: ble_stack_resets
+  ble_advertising_status: ble_advertising_status
+  ble_last_reset_reason: ble_last_reset_reason
   pair_mode_switch: ble_pair_mode
   fan_name_text: fan_name
   fan_model_select: fan_model

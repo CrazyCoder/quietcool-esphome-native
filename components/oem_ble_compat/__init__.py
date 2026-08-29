@@ -45,6 +45,10 @@ CONF_RUNTIME_REMAINING = "runtime_remaining_sensor"
 CONF_DEFAULT_RUN_NUMBER = "default_run_minutes_number"
 CONF_SMART_MODE_STATUS = "smart_mode_status"
 CONF_PAIR_COUNT_SENSOR = "pair_count_sensor"
+CONF_BLE_ACTIVE_CLIENTS_SENSOR = "ble_active_clients_sensor"
+CONF_BLE_STACK_RESETS_SENSOR = "ble_stack_resets_sensor"
+CONF_BLE_ADVERTISING_STATUS = "ble_advertising_status"
+CONF_BLE_LAST_RESET_REASON = "ble_last_reset_reason"
 CONF_FAN_NAME_TEXT = "fan_name_text"
 CONF_FAN_MODEL_SELECT = "fan_model_select"
 CONF_FAN_SERIAL_TEXT = "fan_serial_text"
@@ -80,6 +84,10 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional(CONF_DEFAULT_RUN_NUMBER): cv.use_id(number.Number),
         cv.Optional(CONF_SMART_MODE_STATUS): cv.use_id(text_sensor.TextSensor),
         cv.Optional(CONF_PAIR_COUNT_SENSOR): cv.use_id(sensor.Sensor),
+        cv.Optional(CONF_BLE_ACTIVE_CLIENTS_SENSOR): cv.use_id(sensor.Sensor),
+        cv.Optional(CONF_BLE_STACK_RESETS_SENSOR): cv.use_id(sensor.Sensor),
+        cv.Optional(CONF_BLE_ADVERTISING_STATUS): cv.use_id(text_sensor.TextSensor),
+        cv.Optional(CONF_BLE_LAST_RESET_REASON): cv.use_id(text_sensor.TextSensor),
         cv.Optional(CONF_FAN_NAME_TEXT): cv.use_id(text.Text),
         cv.Optional(CONF_FAN_MODEL_SELECT): cv.use_id(select.Select),
         cv.Optional(CONF_FAN_SERIAL_TEXT): cv.use_id(text.Text),
@@ -96,6 +104,7 @@ CONFIG_SCHEMA = cv.Schema(
 async def to_code(config):
     var = cg.new_Pvariable(config[CONF_ID])
     await cg.register_component(var, config)
+    cg.add_define("USE_OTA_STATE_LISTENER")
 
     # Re-assert our raw OEM advertising payload after every ESPHome advertising
     # restart (see OemBleCompat::gap_event_handler).
@@ -129,6 +138,10 @@ async def to_code(config):
         (CONF_DEFAULT_RUN_NUMBER, "set_default_run_number"),
         (CONF_SMART_MODE_STATUS, "set_smart_mode_status"),
         (CONF_PAIR_COUNT_SENSOR, "set_pair_count_sensor"),
+        (CONF_BLE_ACTIVE_CLIENTS_SENSOR, "set_ble_active_clients_sensor"),
+        (CONF_BLE_STACK_RESETS_SENSOR, "set_ble_stack_resets_sensor"),
+        (CONF_BLE_ADVERTISING_STATUS, "set_ble_advertising_status"),
+        (CONF_BLE_LAST_RESET_REASON, "set_ble_last_reset_reason"),
         (CONF_FAN_NAME_TEXT, "set_fan_name_text"),
         (CONF_FAN_MODEL_SELECT, "set_fan_model_select"),
         (CONF_FAN_SERIAL_TEXT, "set_fan_serial_text"),
