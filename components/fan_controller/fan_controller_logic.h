@@ -488,8 +488,26 @@ class FanControllerLogic {
     }
   }
 
-  static bool is_overtemp(float temp_c) {
-    return temp_c >= OVERTEMP_CUTOFF_C;
+  static bool overtemp_watchdog_tripped(bool watchdogs_enabled, float temp_c) {
+    return watchdogs_enabled && temp_c >= OVERTEMP_CUTOFF_C;
+  }
+
+  static uint32_t next_watchdog_start_ms(bool watchdogs_enabled, bool fan_running,
+                                          uint32_t started_at_ms, uint32_t now_ms) {
+    if (!watchdogs_enabled || !fan_running) return 0;
+    return started_at_ms == 0 ? now_ms : started_at_ms;
+  }
+
+  static bool runtime_watchdog_expired(bool watchdogs_enabled, uint32_t started_at_ms,
+                                       uint32_t now_ms) {
+    return watchdogs_enabled && started_at_ms > 0 &&
+           (now_ms - started_at_ms) >= WATCHDOG_MAX_RUNTIME_MS;
+  }
+
+  static bool sensor_watchdog_expired(bool watchdogs_enabled, uint32_t last_valid_ms,
+                                      uint32_t now_ms) {
+    return watchdogs_enabled &&
+           (last_valid_ms == 0 || (now_ms - last_valid_ms) >= SENSOR_STALE_MS);
   }
 
   // Speed <-> 1-based HA speed index for the given DIP-derived count.

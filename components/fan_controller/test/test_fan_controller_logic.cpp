@@ -1042,17 +1042,63 @@ TEST("smart hysteresis: ThreeSpeed drops High->Med below relaxed high band") {
              Speed::Med);
 }
 
-// --- is_overtemp ---
-TEST("is_overtemp: below cutoff → false") {
-  REQUIRE_EQ(FanControllerLogic::is_overtemp(80.0f), false);
+// --- overtemp_watchdog_tripped ---
+TEST("overtemp watchdog: honors enable state and cutoff") {
+  REQUIRE_EQ(FanControllerLogic::overtemp_watchdog_tripped(true, 80.0f), false);
+  REQUIRE_EQ(FanControllerLogic::overtemp_watchdog_tripped(
+                 true, qc::OVERTEMP_CUTOFF_C),
+             true);
+  REQUIRE_EQ(FanControllerLogic::overtemp_watchdog_tripped(true, 90.0f), true);
+  REQUIRE_EQ(FanControllerLogic::overtemp_watchdog_tripped(false, 90.0f), false);
 }
 
-TEST("is_overtemp: at cutoff → true") {
-  REQUIRE_EQ(FanControllerLogic::is_overtemp(qc::OVERTEMP_CUTOFF_C), true);
+// --- Watchdog policy ---
+TEST("watchdog start: enabled running fan starts once; disabled or off clears") {
+  REQUIRE_EQ(FanControllerLogic::next_watchdog_start_ms(true, true, 0, 123u), 123u);
+  REQUIRE_EQ(FanControllerLogic::next_watchdog_start_ms(true, true, 123u, 456u), 123u);
+  REQUIRE_EQ(FanControllerLogic::next_watchdog_start_ms(false, true, 123u, 456u), 0u);
+  REQUIRE_EQ(FanControllerLogic::next_watchdog_start_ms(true, false, 123u, 456u), 0u);
 }
 
-TEST("is_overtemp: above cutoff → true") {
-  REQUIRE_EQ(FanControllerLogic::is_overtemp(90.0f), true);
+TEST("runtime watchdog: honors enable state and exact 24h boundary") {
+  constexpr uint32_t START = 123u;
+  REQUIRE_EQ(FanControllerLogic::runtime_watchdog_expired(
+                 true, START, START + qc::WATCHDOG_MAX_RUNTIME_MS - 1u),
+             false);
+  REQUIRE_EQ(FanControllerLogic::runtime_watchdog_expired(
+                 true, START, START + qc::WATCHDOG_MAX_RUNTIME_MS),
+             true);
+  REQUIRE_EQ(FanControllerLogic::runtime_watchdog_expired(
+                 false, START, START + qc::WATCHDOG_MAX_RUNTIME_MS),
+             false);
+  REQUIRE_EQ(FanControllerLogic::runtime_watchdog_expired(true, 0, 0xFFFFFFFFu), false);
+}
+
+TEST("runtime watchdog: elapsed comparison survives millis wrap") {
+  constexpr uint32_t START = 0xFFFFFF00u;
+  const uint32_t now = START + qc::WATCHDOG_MAX_RUNTIME_MS;
+  REQUIRE_EQ(FanControllerLogic::runtime_watchdog_expired(true, START, now), true);
+}
+
+TEST("sensor watchdog: honors enable state, missing sample, and boundary") {
+  constexpr uint32_t LAST_VALID = 123u;
+  REQUIRE_EQ(FanControllerLogic::sensor_watchdog_expired(true, 0, 456u), true);
+  REQUIRE_EQ(FanControllerLogic::sensor_watchdog_expired(false, 0, 456u), false);
+  REQUIRE_EQ(FanControllerLogic::sensor_watchdog_expired(
+                 true, LAST_VALID, LAST_VALID + qc::SENSOR_STALE_MS - 1u),
+             false);
+  REQUIRE_EQ(FanControllerLogic::sensor_watchdog_expired(
+                 true, LAST_VALID, LAST_VALID + qc::SENSOR_STALE_MS),
+             true);
+  REQUIRE_EQ(FanControllerLogic::sensor_watchdog_expired(
+                 false, LAST_VALID, LAST_VALID + qc::SENSOR_STALE_MS),
+             false);
+}
+
+TEST("sensor watchdog: elapsed comparison survives millis wrap") {
+  constexpr uint32_t LAST_VALID = 0xFFFFFF00u;
+  const uint32_t now = LAST_VALID + qc::SENSOR_STALE_MS;
+  REQUIRE_EQ(FanControllerLogic::sensor_watchdog_expired(true, LAST_VALID, now), true);
 }
 
 // ============================================================================
