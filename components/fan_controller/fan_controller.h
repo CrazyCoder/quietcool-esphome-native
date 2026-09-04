@@ -126,7 +126,7 @@ class FanController : public Component, public fan::Fan {
   void reset_watchdog();
   void set_watchdog_sensor(binary_sensor::BinarySensor *s) { watchdog_sensor_ = s; }
   void set_disable_watchdogs_switch(switch_::Switch *s) { disable_watchdogs_switch_ = s; }
-  void on_watchdog_switch_changed();
+  void on_watchdog_switch_changed(bool disabled);
   // Optional one-shot diagnostic — receives configured_speed_count_ after
   // the DIP truth table runs in setup(). Lets YAML surface the speed-tap
   // count to HA without re-decoding the DIP bits.

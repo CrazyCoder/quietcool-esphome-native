@@ -792,10 +792,12 @@ switch:
     optimistic: true
     restore_mode: RESTORE_DEFAULT_OFF
     entity_category: config
+    # Template-switch actions run before optimistic state publication, so pass
+    # the intended value instead of reading the switch's previous state.
     on_turn_on:
-      - lambda: 'id(attic_fan).on_watchdog_switch_changed();'
+      - lambda: 'id(attic_fan).on_watchdog_switch_changed(true);'
     on_turn_off:
-      - lambda: 'id(attic_fan).on_watchdog_switch_changed();'
+      - lambda: 'id(attic_fan).on_watchdog_switch_changed(false);'
 
   # --- Reboot-resume opt-in.
   # When ON, the fan_controller persists its last speed + wall-clock timer

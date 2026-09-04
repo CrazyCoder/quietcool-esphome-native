@@ -772,8 +772,7 @@ void FanController::reset_watchdog() {
   publish_smart_status_("Off");
 }
 
-void FanController::on_watchdog_switch_changed() {
-  const bool disabled = watchdogs_disabled_();
+void FanController::on_watchdog_switch_changed(bool disabled) {
   ESP_LOGW(TAG, "Safety watchdogs %s by user", disabled ? "DISABLED" : "enabled");
   watchdog_tripped_ = false;
   overtemp_tripped_ = false;
