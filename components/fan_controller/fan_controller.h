@@ -125,6 +125,8 @@ class FanController : public Component, public fan::Fan {
   bool is_watchdog_tripped() const { return watchdog_tripped_; }
   void reset_watchdog();
   void set_watchdog_sensor(binary_sensor::BinarySensor *s) { watchdog_sensor_ = s; }
+  void set_disable_watchdogs_switch(switch_::Switch *s) { disable_watchdogs_switch_ = s; }
+  void on_watchdog_switch_changed();
   // Optional one-shot diagnostic — receives configured_speed_count_ after
   // the DIP truth table runs in setup(). Lets YAML surface the speed-tap
   // count to HA without re-decoding the DIP bits.
@@ -293,6 +295,10 @@ class FanController : public Component, public fan::Fan {
   bool overtemp_tripped_ = false;
   bool watchdog_tripped_ = false;
   uint32_t relay_on_start_ms_ = 0;
+  switch_::Switch *disable_watchdogs_switch_ = nullptr;
+  bool watchdogs_disabled_() const {
+    return disable_watchdogs_switch_ && disable_watchdogs_switch_->state;
+  }
   uint32_t last_valid_sensor_ms_ = 0;
   sensor::Sensor *temp_sensor_ = nullptr;
   sensor::Sensor *humidity_sensor_ = nullptr;

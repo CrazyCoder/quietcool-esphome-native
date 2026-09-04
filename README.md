@@ -34,7 +34,7 @@ The stock hub is controllable **only over BLE** — whatever controls it (the Qu
 | **History** | 31-day rolling log, viewable in the app | Unlimited via HA recorder / long-term statistics |
 | **Power blip at 2 AM** | Fan stays off | Opt-in **Resume on Boot**: speed and remaining timer survive a reboot |
 | **Louvers** | — | Opt-in HIGH pulse on start-up to pop sluggish louvers open |
-| **Safety** | Over-temp + 24 h watchdog | Same cutoffs, plus fail-closed on invalid DIP wiring (stock leaves HIGH unguarded when the DIP is misconfigured) |
+| **Safety** | Over-temp + 24 h watchdog | Same cutoffs by default, an explicit user-risk override, plus fail-closed on invalid DIP wiring (stock leaves HIGH unguarded when the DIP is misconfigured) |
 | **Recovery** | Re-flash via app | Layered: auto safe mode, Improv-BLE, captive portal AP, UART — plus one-button stock restore |
 | **Updates & source** | Closed firmware, app-driven updates from the vendor CDN | GPL-3.0 source, unit-tested control logic, OTA from your own machine — fully local, no cloud in the loop |
 
@@ -148,6 +148,7 @@ On first boot after flashing over OEM firmware, existing presets are imported fr
 | `text.<device>_fan_serial_number` | *(empty)* | Fan serial number (max 25 chars). |
 | `switch.<device>_louver_pop_open` | OFF | When ON, prepends a brief HIGH pulse on Off→Low/Med transitions to assist mechanical louvers opening via airflow. OEM stock controller doesn't have this; opt-in for fans with sluggish shutters. |
 | `switch.<device>_dry_run_mode` | OFF | When ON, suppresses relay GPIO writes while everything else (logic, timer, HA state) runs normally. **Use this during install / debugging** so you can iterate firmware without actually cycling the fan. A deliberate ON persists across reboots, so OTA-flash iteration doesn't re-enable the relays behind your back. |
+| `switch.<device>_disable_safety_watchdogs` | OFF | **Risky override.** When ON, disables the 24-hour runtime, over-temperature, and stale-sensor protections. Turning it ON clears existing trips. Turning it OFF re-enables protection and starts a fresh 24-hour runtime window if the fan is already running. The setting persists across reboots. |
 | `switch.<device>_resume_on_boot` | OFF | When ON, the firmware persists last speed + Smart Mode state and resumes after a controller reboot. Useful so a brief power blip doesn't kill night-cooling. OFF matches OEM cold-boot (safer). |
 | `switch.<device>_smart_t_high_enabled` (×5) | **ON** | Per-rule enable switches for the five Smart Mode thresholds (T High / T Med / T Low / H High / H Low). Turning one OFF removes that rule from the decision tree. Stored per preset, like the threshold values. |
 | `number.<device>_cal_t` | **0.0 °F** | Calibration offset added to the SHT30 temperature reading. Feeds Smart Mode, the over-temp cutoff, and the app-reported temperature — not just the HA display. A **°F delta** (see the unit note below). |
@@ -163,9 +164,9 @@ On first boot after flashing over OEM firmware, existing presets are imported fr
 | `button.<device>_safe_mode` | Reboot into ESPHome safe mode (Wi-Fi + OTA only, no custom components). Recovery path if a firmware push starts crashing. |
 | `button.<device>_factory_reset` | **Factory reset from HA** — clears Wi-Fi credentials and ESPHome preferences, preserves OEM pairings/presets/settings, and reboots into Improv-BLE for re-onboarding. Same effect as the KEY1 ≥ 5 s hold. |
 | `button.<device>_restore_stock_firmware` | Pull the verified OEM V4.1 image, preserve OEM NVS state, and reboot into stock firmware. |
-| `button.<device>_reset_watchdog` | Clears the 24h runtime watchdog or over-temp trip. Required to re-enable Smart Mode after a safety event. |
+| `button.<device>_reset_watchdog` | Clears the 24h runtime watchdog or over-temp trip. Required to re-enable Smart Mode after a safety event unless safety watchdogs are disabled. |
 | `button.<device>_reset_ble_stack` | Restart Bluetooth without rebooting the controller. This disconnects active Smart Control and Improv clients. The button is enabled by default and refuses to run during OTA. |
-| `binary_sensor.<device>_watchdog_tripped` | True when the 24h continuous runtime watchdog or over-temp safety has tripped. Clears via the Reset Watchdog button. |
+| `binary_sensor.<device>_watchdog_tripped` | True when the enabled 24h continuous runtime watchdog or over-temp safety has tripped. Clears via the Reset Watchdog button or when safety watchdogs are disabled. |
 | `binary_sensor.<device>_improv_ble_advertising` | True while the device is advertising Improv-BLE for Wi-Fi re-onboarding. |
 | `sensor.<device>_ble_paired_devices` | Number of BLE pair-ids currently stored in NVS (max 50). Updates on pair/clear. |
 | `switch.<device>_ble_pair_mode` | Toggle BLE pairing mode. Auto-turns OFF after 2 min timeout or when a device pairs successfully. Same effect as KEY2 short-press (OEM parity). |
@@ -191,7 +192,7 @@ The fan has three operating modes, selectable from the **Fan Mode** select (in H
 | ESPHome Fan Mode | Smart Control app | OEM firmware internal | Behavior |
 |---|---|---|---|
 | **Timer** *(default)* | Timer | mode 1 ("Run") | Countdown timer — fan runs at chosen speed for a set duration, auto-stops when timer expires |
-| **Run** | Run | mode 4 ("Timer") | Indefinite — fan runs until manually stopped. 24h safety watchdog still applies |
+| **Run** | Run | mode 4 ("Timer") | Indefinite — fan runs until manually stopped. 24h safety watchdog applies unless disabled |
 | **Smart** | Smart (TH) | mode 2 ("Smart") | Autonomous — firmware reads SHT30 and drives speed per temp/humidity thresholds |
 | *(fan off)* | Idle | mode 0 ("Off") | All relays off |
 
@@ -207,7 +208,7 @@ The fan has three operating modes, selectable from the **Fan Mode** select (in H
 ### 2. Run mode (select: `Fan Mode → Run`)
 
 - Set **Fan Mode** to **"Run"** in HA's device Configuration panel (or call `select.select_option` with `entity_id: select.<device>_fan_mode, option: Run`). Also accessible via REST: `POST /select/fan_mode/set?option=Run`.
-- Fan runs at the current/last speed with **no countdown timer**. Runs until you manually stop it, change modes, or the 24h safety watchdog trips.
+- Fan runs at the current/last speed with **no countdown timer**. It runs until you manually stop it, change modes, or the 24h safety watchdog trips. Turn **Disable Safety Watchdogs** ON to remove that limit at your own risk.
 - Matches the stock app's "Run" mode: *"Run mode will operate your attic fan at the set speed indefinitely."*
 - Any `extend_runtime` or `set_runtime` call with a duration > 0 switches back to Timer behavior.
 
@@ -288,6 +289,8 @@ On **1-speed wiring**, only rules 1, 2, and 5 apply (with H Response limited to 
 - **Over-temperature cutoff**: if the SHT30 reads ≥ 83.3 °C (182 °F), all relays are forced off regardless of mode. Latching — requires pressing "Reset Watchdog" in HA to resume.
 - **24-hour continuous runtime watchdog**: if any relay has been on for 24 consecutive hours (any mode, not just Smart), all relays are forced off. Prevents forgotten fans from running indefinitely. Latching — same reset button.
 - **Sensor stale watchdog**: if the SHT30 stops delivering valid readings for 5 minutes, Smart Mode suspends (relays off). Resumes automatically when the sensor recovers — no manual reset needed.
+
+All three watchdogs are enabled by default. Turn **Disable Safety Watchdogs** ON only if you accept the risk of the fan continuing to run during an over-temperature condition, after invalid sensor readings, or for longer than 24 hours. This override persists across reboots. Turning it OFF restores all protections and starts a fresh 24-hour runtime window if the fan is already running.
 - **60-second stabilization gate**: Smart Mode won't drive relays for the first 60 seconds after boot, giving the SHT30 time to stabilize after power-on.
 
 ### 6. KEY1 physical button (no timer — matches OEM stock button)

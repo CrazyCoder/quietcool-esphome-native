@@ -27,6 +27,7 @@ CONF_DIP_C = "dip_c"
 CONF_LOUVER_POP_OPEN_SECONDS = "louver_pop_open_seconds"
 CONF_LOUVER_POP_OPEN_SWITCH = "louver_pop_open_switch"
 CONF_DRY_RUN_SWITCH = "dry_run_switch"
+CONF_DISABLE_WATCHDOGS_SWITCH = "disable_watchdogs_switch"
 CONF_RUNTIME_REMAINING_SENSOR = "runtime_remaining_sensor"
 CONF_MAX_RUN_MINUTES = "max_run_minutes"
 CONF_RESTORE_MODE_SWITCH = "restore_mode_switch"
@@ -84,6 +85,10 @@ CONFIG_SCHEMA = (
             # safely iterating firmware while the fan is physically wired.
             # Switch should ship RESTORE_DEFAULT_OFF (relays live by default).
             cv.Optional(CONF_DRY_RUN_SWITCH): cv.use_id(switch.Switch),
+            # Optional safety override. When ON, all watchdogs are bypassed.
+            # The referenced switch must default OFF so protection is enabled
+            # when no restored preference exists.
+            cv.Optional(CONF_DISABLE_WATCHDOGS_SWITCH): cv.use_id(switch.Switch),
             # Countdown timer.
             # Optional sensor that gets the remaining-seconds value once per
             # second while a timer is running, and 0 when idle. Omit if you
@@ -177,6 +182,10 @@ async def to_code(config):
     if CONF_DRY_RUN_SWITCH in config:
         sw = await cg.get_variable(config[CONF_DRY_RUN_SWITCH])
         cg.add(var.set_dry_run_switch(sw))
+
+    if CONF_DISABLE_WATCHDOGS_SWITCH in config:
+        sw = await cg.get_variable(config[CONF_DISABLE_WATCHDOGS_SWITCH])
+        cg.add(var.set_disable_watchdogs_switch(sw))
 
     if CONF_RUNTIME_REMAINING_SENSOR in config:
         s = await cg.get_variable(config[CONF_RUNTIME_REMAINING_SENSOR])

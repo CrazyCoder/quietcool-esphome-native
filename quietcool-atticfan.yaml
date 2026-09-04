@@ -781,6 +781,22 @@ switch:
     restore_mode: RESTORE_DEFAULT_OFF
     entity_category: diagnostic
 
+  # --- Expert safety override. When ON, disables the 24h continuous-runtime,
+  # over-temperature, and stale-sensor watchdogs. Defaults OFF and persists only
+  # when deliberately enabled. Changing the setting clears any existing trip;
+  # re-enabling protection starts a fresh runtime window if the fan is running. ---
+  - platform: template
+    id: disable_safety_watchdogs
+    name: "Disable Safety Watchdogs"
+    icon: mdi:shield-off-outline
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    entity_category: config
+    on_turn_on:
+      - lambda: 'id(attic_fan).on_watchdog_switch_changed();'
+    on_turn_off:
+      - lambda: 'id(attic_fan).on_watchdog_switch_changed();'
+
   # --- Reboot-resume opt-in.
   # When ON, the fan_controller persists its last speed + wall-clock timer
   # endpoint to NVS on every state change. On boot, after HA time syncs, the
@@ -994,6 +1010,7 @@ fan:
     smart_mode_status: smart_mode_status
     fan_speed_sensor: fan_speed
     watchdog_sensor: watchdog_tripped_bs
+    disable_watchdogs_switch: disable_safety_watchdogs
     speeds_available_sensor: speeds_available
     # Pressed by dispatch_pending_dual_gesture() when both keys commit
     # past 10s — the canonical KEY1+KEY2 long-hold action.

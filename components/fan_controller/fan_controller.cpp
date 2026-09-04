@@ -464,6 +464,9 @@ void FanController::dump_config() {
   }
   ESP_LOGCONFIG(TAG, "  Dry-run switch: %s",
                 dry_run_switch_ ? "OK (relay writes gated by HA toggle)" : "MISSING — always live");
+  ESP_LOGCONFIG(TAG, "  Safety watchdog override: %s (current: %s)",
+                disable_watchdogs_switch_ ? "OK" : "MISSING — protection always enabled",
+                watchdogs_disabled_() ? "DISABLED" : "enabled");
   ESP_LOGCONFIG(TAG, "  Max run: %u minutes (countdown timer cap)",
                 max_run_ms_ / 60000u);
   ESP_LOGCONFIG(TAG, "  Default run number: %s (currently %u min)",
@@ -660,8 +663,8 @@ void FanController::apply_step_(const ::qc::PlanStep &step) {
     if (low_relay_)  low_relay_->set_state(rs.low);
   }
   current_speed_ = step.target;
-  // 24h watchdog: track continuous relay-on start time.
-  if (step.target != ::qc::Speed::Off) {
+  // 24h watchdog: track continuous relay-on time only while protection is enabled.
+  if (step.target != ::qc::Speed::Off && !watchdogs_disabled_()) {
     if (relay_on_start_ms_ == 0) relay_on_start_ms_ = millis();
   } else {
     relay_on_start_ms_ = 0;
@@ -764,9 +767,21 @@ void FanController::reset_watchdog() {
   ESP_LOGI(TAG, "Watchdog reset by user");
   watchdog_tripped_ = false;
   overtemp_tripped_ = false;
-  relay_on_start_ms_ = 0;
+  relay_on_start_ms_ = current_speed_ != ::qc::Speed::Off && !watchdogs_disabled_() ? millis() : 0;
   if (watchdog_sensor_) watchdog_sensor_->publish_state(false);
   publish_smart_status_("Off");
+}
+
+void FanController::on_watchdog_switch_changed() {
+  const bool disabled = watchdogs_disabled_();
+  ESP_LOGW(TAG, "Safety watchdogs %s by user", disabled ? "DISABLED" : "enabled");
+  watchdog_tripped_ = false;
+  overtemp_tripped_ = false;
+  relay_on_start_ms_ = !disabled && current_speed_ != ::qc::Speed::Off ? millis() : 0;
+  if (watchdog_sensor_) watchdog_sensor_->publish_state(false);
+  publish_smart_status_(smart_mode_active_
+                            ? (current_speed_ == ::qc::Speed::Off ? "Monitoring" : "Running")
+                            : "Off");
 }
 
 bool FanController::is_threshold_enabled(::qc::SmartThreshold t) const {
@@ -786,11 +801,12 @@ void FanController::smart_tick() {
   const float hum = humidity_sensor_->state;
   const bool sensors_valid = std::isfinite(temp_c) && std::isfinite(hum);
   const uint32_t now = millis();
+  const bool watchdogs_disabled = watchdogs_disabled_();
 
   if (sensors_valid) last_valid_sensor_ms_ = now;
 
   // --- Over-temp safety (all modes) ---
-  if (sensors_valid && ::qc::FanControllerLogic::is_overtemp(temp_c)) {
+  if (!watchdogs_disabled && sensors_valid && ::qc::FanControllerLogic::is_overtemp(temp_c)) {
     ESP_LOGW(TAG, "OVER-TEMP SAFETY: %.1f°C >= %.1f°C cutoff — forcing OFF",
              temp_c, ::qc::OVERTEMP_CUTOFF_C);
     overtemp_tripped_ = true;
@@ -804,7 +820,7 @@ void FanController::smart_tick() {
   }
 
   // --- 24h continuous runtime watchdog (all modes) ---
-  if (relay_on_start_ms_ > 0 &&
+  if (!watchdogs_disabled && relay_on_start_ms_ > 0 &&
       (now - relay_on_start_ms_) >= ::qc::WATCHDOG_MAX_RUNTIME_MS) {
     trip_watchdog_("Continuous runtime exceeded 24h");
     return;
@@ -819,8 +835,9 @@ void FanController::smart_tick() {
   }
 
   // --- Sensor stale watchdog (Smart Mode only, non-latching) ---
-  if (last_valid_sensor_ms_ == 0 ||
-      (now - last_valid_sensor_ms_) >= ::qc::SENSOR_STALE_MS) {
+  if (!watchdogs_disabled &&
+      (last_valid_sensor_ms_ == 0 ||
+       (now - last_valid_sensor_ms_) >= ::qc::SENSOR_STALE_MS)) {
     if (current_speed_ != ::qc::Speed::Off) {
       ESP_LOGW(TAG, "Smart Mode: sensor stale >5min — suspending (relays off)");
       auto plan = ::qc::FanControllerLogic::plan_speed_transition(
