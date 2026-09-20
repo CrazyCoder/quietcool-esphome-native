@@ -7,6 +7,7 @@
 #include "esphome/core/application.h"
 #include "esphome/core/helpers.h"
 #include "esphome/core/log.h"
+#include "esphome/core/version.h"
 
 #include <cJSON.h>
 #include <esp_bt_device.h>
@@ -330,6 +331,12 @@ void OemBleCompat::begin_ble_stack_recovery_(const char *reason) {
   ble_link_health_monitor_.reset();
   clear_ble_peers_();
   framer_.clear();
+#if ESPHOME_VERSION_CODE >= VERSION_CODE(2026, 9, 0)
+  // Advertising references survive a stack cycle. Release ours before the
+  // restarted service acquires it again; otherwise every reset leaks a request.
+  if (service_started_)
+    ble->advertising_stop();
+#endif
   service_started_ = false;
   pending_restart_ = false;
 #ifdef USE_WIFI
@@ -516,7 +523,6 @@ void OemBleCompat::start_service_() {
       // raw payload has to be written after it, not before, or it is discarded.
       // gap_event_handler re-asserts on every later advertising restart.
       esp32_ble::global_ble->advertising_set_service_data_and_name({}, true);
-      apply_oem_raw_adv_();
 
       ESP_LOGI(TAG, "OEM BLE service started, name: %s (no-scanrsp-name)", name);
       if (ble_mac_sensor_) {
@@ -527,6 +533,13 @@ void OemBleCompat::start_service_() {
     } else {
       ESP_LOGI(TAG, "OEM BLE service started");
     }
+#if ESPHOME_VERSION_CODE >= VERSION_CODE(2026, 9, 0)
+    // Runtime-created GATT services no longer get an implicit advertising
+    // request. Own exactly one until stop_service_() or stack recovery.
+    esp32_ble::global_ble->advertising_start();
+#endif
+    // Apply after ESPHome's start/refresh writes its structured advertisement.
+    apply_oem_raw_adv_();
   }
 }
 
@@ -822,6 +835,10 @@ void OemBleCompat::stop_service_() {
     // response within the 31-byte budget and prevents the OEM app from
     // mistaking an onboarding advertisement for a controllable fan.
     esp_ble_gap_set_device_name("QuietCool Setup");
+#if ESPHOME_VERSION_CODE >= VERSION_CODE(2026, 9, 0)
+    // Release only our request; Improv may already own another one.
+    esp32_ble::global_ble->advertising_stop();
+#endif
 #ifdef USE_WIFI
     // OEM BLE no longer in use — stop biasing the radio against Wi-Fi.
     esp_coex_preference_set(ESP_COEX_PREFER_BALANCE);
