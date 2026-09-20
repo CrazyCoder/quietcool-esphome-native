@@ -222,7 +222,7 @@ class OemBleCompat : public Component, public ota::OTAGlobalStateListener {
 
   // ── One-shot OEM NVS import (first boot only) ──
   void import_fan_info_from_nvs_();
-  void import_presets_from_nvs_();
+  ::qc::PresetImportResult import_presets_from_nvs_(uint8_t dip);
 
   // ── State snapshot helpers ──
   uint8_t current_speed_() const;
@@ -327,6 +327,7 @@ class OemBleCompat : public Component, public ota::OTAGlobalStateListener {
   // Debounced write-through: current ESPHome entity state → OEM hx_list NVS.
   // Covers thresholds, timer defaults, fan info, presets, guide_setup.
   bool hx_dirty_ = false;
+  bool preset_bank_schema_current_ = false;
   ::qc::HxFlushTimer hx_flush_timer_;
   static constexpr uint32_t HX_FLUSH_DELAY_MS = 30000;
   void flush_hx_list_();

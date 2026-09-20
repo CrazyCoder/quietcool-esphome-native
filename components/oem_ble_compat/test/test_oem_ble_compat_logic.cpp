@@ -78,7 +78,7 @@ TEST("GetWorkState: sensor fault does not imply AirControl") {
 
 TEST("GetVersion exactly matches the OEM production channel") {
   REQUIRE_EQ(std::string(get_version_response()),
-             std::string(R"({"A":3,"V":"IT-BLT-ATTICFAN_V4.1","P":100,"D":"2025.11.18","M":"online","H":"A"})"));
+             std::string(R"({"A":3,"V":"IT-BLT-ATTICFAN_V4.4","P":100,"D":"2025.11.18","M":"online","H":"A"})"));
 }
 
 // ============================================================================
@@ -907,5 +907,152 @@ TEST("upgrade_state_string: unknown → Connect_NO (default)") {
 // ============================================================================
 // main
 // ============================================================================
+
+TEST("preset banks match OEM one/two/three-speed wiring and every slot key") {
+  const char *prefixes[] = {"Med", "High", "Low"};
+  const char chars[] = {'m', 'h', 'l'};
+  const char *counts[] = {"medsize1", "highsize1", "lowsize1"};
+  for (uint8_t dip = 1; dip <= 3; ++dip) {
+    const auto *keys = nvs_preset_keys_for_dip(dip);
+    REQUIRE(keys != nullptr);
+    REQUIRE_EQ(std::string(keys->value_prefix), std::string(prefixes[dip - 1]));
+    REQUIRE_EQ(std::string(keys->tag_key), std::string("Presets") + prefixes[dip - 1]);
+    REQUIRE_EQ(std::string(keys->count_key), std::string(counts[dip - 1]));
+    for (int slot = 0; slot < 4; ++slot) {
+      char key[20];
+      keys->format_name_key(slot, key, sizeof(key));
+      REQUIRE_EQ(std::string(key), std::string("testname") + chars[dip - 1] +
+                 std::to_string(slot + 1));
+      for (int value = 0; value < 6; ++value) {
+        keys->format_value_key(slot, value, key, sizeof(key));
+        REQUIRE_EQ(std::string(key), std::string(prefixes[dip - 1]) +
+                   std::to_string((slot + 1) * 10 + value));
+      }
+    }
+  }
+  REQUIRE(nvs_preset_keys_for_dip(0) == nullptr);
+  REQUIRE(nvs_preset_keys_for_dip(4) == nullptr);
+  REQUIRE(nvs_preset_keys_for_dip(255) == nullptr);
+}
+
+TEST("first installs and migrated installs import the correct OEM bank") {
+  for (uint8_t dip = 0; dip <= 4; ++dip) {
+    REQUIRE_EQ(preset_import_dip(dip, false, false), dip);
+    REQUIRE_EQ(preset_import_dip(dip, false, true), dip);
+    REQUIRE_EQ(preset_import_dip(dip, true, true), dip);
+  }
+}
+
+TEST("legacy installs read the reversed source until the migration commits") {
+  REQUIRE_EQ(preset_import_dip(1, true, false), uint8_t(1));
+  REQUIRE_EQ(preset_import_dip(2, true, false), uint8_t(3));
+  REQUIRE_EQ(preset_import_dip(3, true, false), uint8_t(2));
+  REQUIRE_EQ(preset_import_dip(0, true, false), uint8_t(0));
+  REQUIRE_EQ(preset_import_dip(4, true, false), uint8_t(4));
+  // Latest legacy hx_list data is copied to the corrected bank, not swapped
+  // back again after reboot with the marker present.
+  for (uint8_t dip : {uint8_t(2), uint8_t(3)}) {
+    const auto *source = nvs_preset_keys_for_dip(preset_import_dip(dip, true, false));
+    const auto *target = nvs_preset_keys_for_dip(preset_import_dip(dip, true, true));
+    REQUIRE(std::string(source->tag_key) != target->tag_key);
+    REQUIRE(target == nvs_preset_keys_for_dip(dip));
+  }
+}
+
+TEST("pair persistence checks each write and commit, stopping at any failure") {
+  for (int fail_at = 0; fail_at <= 4; ++fail_at) {
+    std::vector<std::string> calls;
+    auto record = [&](const std::string &call) {
+      calls.push_back(call);
+      return static_cast<int>(calls.size()) != fail_at;
+    };
+    const bool ok = persist_pair_id("new-id", 2,
+        [&](const char *key, const char *value) { return record(std::string(key) + "=" + value); },
+        [&](const char *key, uint8_t value) { return record(std::string(key) + "=" + std::to_string(value)); },
+        [&]() { return record("commit"); });
+    REQUIRE_EQ(ok, fail_at == 0);
+    REQUIRE_EQ(calls.size(), size_t(fail_at == 0 ? 4 : fail_at));
+    const std::vector<std::string> expected{"Phone3=new-id", "pair_num=3", "flag_PhoneID=65", "commit"};
+    for (size_t i = 0; i < calls.size(); ++i) REQUIRE_EQ(calls[i], expected[i]);
+  }
+}
+
+struct StoredPresetTest {
+  char name[51] = "";
+  int16_t values[6] = {};
+};
+struct PresetBankTest {
+  uint8_t count = 0;
+  StoredPresetTest presets[4] = {};
+};
+
+TEST("preset import stages all fields and preserves destination on every read failure") {
+  for (int fail_at = 0; fail_at <= 28; ++fail_at) {
+    PresetBankTest bank{};
+    bank.count = 1;
+    std::strcpy(bank.presets[0].name, "cached");
+    bank.presets[0].values[0] = 123;
+    int reads = 0;
+    const bool ok = read_preset_entries(bank, 4,
+        [&](int slot, char *name, size_t capacity) {
+          std::snprintf(name, capacity, "Preset%d", slot);
+          return ++reads != fail_at;
+        },
+        [&](int slot, int index, int16_t &value) {
+          value = slot * 10 + index;
+          return ++reads != fail_at;
+        });
+    REQUIRE_EQ(ok, fail_at == 0);
+    if (ok) {
+      REQUIRE_EQ(bank.count, uint8_t(4));
+      REQUIRE_EQ(std::string(bank.presets[3].name), std::string("Preset3"));
+      REQUIRE_EQ(bank.presets[3].values[5], int16_t(35));
+    } else {
+      REQUIRE_EQ(reads, fail_at);
+      REQUIRE_EQ(bank.count, uint8_t(1));
+      REQUIRE_EQ(std::string(bank.presets[0].name), std::string("cached"));
+      REQUIRE_EQ(bank.presets[0].values[0], int16_t(123));
+    }
+  }
+}
+
+TEST("preset import respects an empty bank and rejects out-of-range counts") {
+  for (uint8_t count : {uint8_t(0), uint8_t(5), uint8_t(255)}) {
+    PresetBankTest bank{};
+    bank.count = 1;
+    int reads = 0;
+    const bool ok = read_preset_entries(bank, count,
+        [&](int, char *, size_t) { ++reads; return true; },
+        [&](int, int, int16_t &) { ++reads; return true; });
+    REQUIRE_EQ(ok, count == 0);
+    REQUIRE_EQ(reads, 0);
+    REQUIRE_EQ(bank.count, uint8_t(count == 0 ? 0 : 1));
+  }
+}
+
+TEST("pair persistence accepts the last slot and never writes beyond slot 50") {
+  for (uint8_t count : {uint8_t(0), uint8_t(49), uint8_t(50), uint8_t(255)}) {
+    int calls = 0;
+    const bool ok = persist_pair_id("id", count,
+        [&](const char *key, const char *) {
+          ++calls;
+          REQUIRE_EQ(std::string(key), "Phone" + std::to_string(count + 1));
+          return true;
+        },
+        [&](const char *, uint8_t) { ++calls; return true; },
+        [&]() { ++calls; return true; });
+    REQUIRE_EQ(ok, count < 50);
+    REQUIRE_EQ(calls, count < 50 ? 4 : 0);
+  }
+}
+
+TEST("GetUpgradeState emits numeric zero in all supported states") {
+  REQUIRE_EQ(get_upgrade_state_response(UPGRADE_STATE_IDLE),
+             std::string(R"({"A":5,"S":"Connect_NO","P":0})"));
+  REQUIRE_EQ(get_upgrade_state_response(UPGRADE_STATE_DOWNLOADING),
+             std::string(R"({"A":5,"S":"Downloading_Progress","P":0})"));
+  REQUIRE_EQ(get_upgrade_state_response(UPGRADE_STATE_FAIL),
+             std::string(R"({"A":5,"S":"Download_Fail","P":0})"));
+}
 
 int main() { return tu::run_all(); }

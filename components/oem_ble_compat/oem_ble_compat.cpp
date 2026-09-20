@@ -66,34 +66,8 @@ static const uint32_t FANINFO_PREF_HASH = 0x71636202;
 static const uint32_t PRESET_PREF_HASH = 0x71636203;
 static const uint32_t ACTIVE_PRESET_PREF_HASH = 0x71636204;
 
-// Per-DIP-wiring NVS key mapping for OEM preset storage.
-struct NvsPresetKeys {
-  const char *value_prefix;   // "Med", "Low", "High"
-  char name_char;             // 'm', 'l', 'h'
-  const char *count_key;      // "medsize1", "lowsize1", "highsize1"
-  const char *tag_key;        // "PresetsMed", "PresetsLow", "PresetsHigh"
-
-  // Per-slot keys: name "testname<c><slot+1>", value "<prefix><(slot+1)*10+j>".
-  // OEM firmware schema; centralised so write+read can't drift apart.
-  void format_name_key(int slot, char *out, size_t n) const {
-    snprintf(out, n, "testname%c%d", name_char, slot + 1);
-  }
-  void format_value_key(int slot, int j, char *out, size_t n) const {
-    snprintf(out, n, "%s%d", value_prefix, (slot + 1) * 10 + j);
-  }
-};
-
-static const NvsPresetKeys *nvs_preset_keys_for_dip(uint8_t dip) {
-  static const NvsPresetKeys med  = {"Med",  'm', "medsize1",  "PresetsMed"};
-  static const NvsPresetKeys low  = {"Low",  'l', "lowsize1",  "PresetsLow"};
-  static const NvsPresetKeys high = {"High", 'h', "highsize1", "PresetsHigh"};
-  switch (dip) {
-    case 1: return &med;    // TwoSpeed
-    case 2: return &low;    // ThreeSpeed
-    case 3: return &high;   // OneSpeed
-    default: return nullptr; // None / invalid
-  }
-}
+using ::qc::NvsPresetKeys;
+using ::qc::nvs_preset_keys_for_dip;
 
 // ── Lifecycle ───────────────────────────────────────────────────────
 
@@ -108,14 +82,58 @@ void OemBleCompat::setup() {
   // real user intent rather than a config entity publishing its own default.
   fan_info_loaded_ = true;
 
-  // Presets: hx_list NVS is the source of truth (written by flush_hx_list_
-  // on every 30s debounce + clean shutdown). ESPHome preference is only a
-  // fallback for first boot before any hx_list data exists.
+  // Keep hx_list authoritative: threshold edits can be newer than the cached
+  // preference. Existing installations migrate from the old, reversed bank;
+  // first installs import the correct OEM bank. Never erase the source bank.
   preset_pref_ = global_preferences->make_preference<PresetStorage>(PRESET_PREF_HASH, true);
+  PresetStorage saved{};
+  const bool has_saved = preset_pref_.load(&saved) && saved.count <= 4;
+  nvs_handle_t h;
+  esp_err_t schema_error = nvs_open("hx_list", NVS_READONLY, &h);
+  if (schema_error == ESP_OK) {
+    uint8_t schema = 0;
+    schema_error = nvs_get_u8(h, ::qc::PRESET_BANK_SCHEMA_KEY, &schema);
+    preset_bank_schema_current_ = schema == 1;
+    if (schema_error == ESP_OK && !preset_bank_schema_current_)
+      schema_error = ESP_ERR_INVALID_STATE;
+    nvs_close(h);
+  }
+  if (schema_error != ESP_OK && schema_error != ESP_ERR_NVS_NOT_FOUND) {
+    ESP_LOGE(TAG, "Cannot read preset schema (%s); preserving preset storage",
+             esp_err_to_name(schema_error));
+    this->mark_failed();
+    return;
+  }
+  // On a first installation, persist the schema before creating any preset
+  // preference. Otherwise a restart before the first flush would mistake that
+  // new cache for evidence of an old, reversed-bank installation.
+  if (!has_saved && !preset_bank_schema_current_) {
+    esp_err_t err = nvs_open("hx_list", NVS_READWRITE, &h);
+    if (err == ESP_OK) {
+      err = nvs_set_u8(h, ::qc::PRESET_BANK_SCHEMA_KEY, 1);
+      if (err == ESP_OK) err = nvs_commit(h);
+      nvs_close(h);
+    }
+    if (err != ESP_OK) {
+      ESP_LOGE(TAG, "Cannot initialize preset schema (%s); preserving preset storage",
+               esp_err_to_name(err));
+      this->mark_failed();
+      return;
+    }
+    preset_bank_schema_current_ = true;
+  }
   presets_ = PresetStorage{};
-  import_presets_from_nvs_();
-  if (presets_.count == 0 && !preset_pref_.load(&presets_))
-    presets_ = PresetStorage{};
+  const auto imported = import_presets_from_nvs_(::qc::preset_import_dip(
+      current_dip_(), has_saved, preset_bank_schema_current_));
+  if (imported == ::qc::PresetImportResult::Error) {
+    ESP_LOGE(TAG, "Incomplete preset bank; preserving storage without migration");
+    this->mark_failed();
+    return;
+  }
+  if (imported == ::qc::PresetImportResult::Absent && has_saved)
+    presets_ = saved;
+  if (!preset_bank_schema_current_ && nvs_preset_keys_for_dip(current_dip_()))
+    mark_hx_dirty();  // Commit corrected bank before its schema marker.
 
   server_ = esp32_ble_server::global_ble_server;
   ota::get_global_ota_callback()->add_global_state_listener(this);
@@ -360,7 +378,7 @@ void OemBleCompat::on_shutdown() {
 // Flush current ESPHome entity state into OEM hx_list NVS keys so a
 // stock-firmware restore picks up the user's latest settings.
 void OemBleCompat::flush_hx_list_() {
-  hx_dirty_ = false;
+  if (this->is_failed()) return;
   hx_flush_timer_.reset();
 
   nvs_handle_t h;
@@ -368,6 +386,10 @@ void OemBleCompat::flush_hx_list_() {
     ESP_LOGW(TAG, "hx_list flush: nvs_open failed");
     return;
   }
+  esp_err_t error = ESP_OK;
+  auto check = [&](esp_err_t result) {
+    if (error == ESP_OK && result != ESP_OK) error = result;
+  };
 
   // Smart Mode thresholds (°F int16, matching OEM schema). Keys + sentinels
   // come from the shared OemThresholdSchema so this write side can't drift from
@@ -375,18 +397,18 @@ void OemBleCompat::flush_hx_list_() {
   using Schema = ::qc::OemThresholdSchema;
   auto en = threshold_enabled_();
   auto write_temp = [&](const char *key, number::Number *n, bool enabled) {
-    if (!enabled) { nvs_set_i16(h, key, Schema::TEMP_SENTINEL); return; }
+    if (!enabled) { check(nvs_set_i16(h, key, Schema::TEMP_SENTINEL)); return; }
     if (!n || std::isnan(n->state)) return;
-    nvs_set_i16(h, key, static_cast<int16_t>(::qc::threshold_c_to_f(n->state)));
+    check(nvs_set_i16(h, key, static_cast<int16_t>(::qc::threshold_c_to_f(n->state))));
   };
   write_temp(Schema::KEY_TEMP_HIGH, smart_temp_high_, en.th);
   write_temp(Schema::KEY_TEMP_MED, smart_temp_med_, en.tm);
   write_temp(Schema::KEY_TEMP_LOW, smart_temp_low_, en.tl);
 
   auto write_hum = [&](const char *key, number::Number *n, bool enabled) {
-    if (!enabled) { nvs_set_u8(h, key, Schema::HUM_SENTINEL); return; }
+    if (!enabled) { check(nvs_set_u8(h, key, Schema::HUM_SENTINEL)); return; }
     if (!n || std::isnan(n->state)) return;
-    nvs_set_u8(h, key, static_cast<uint8_t>(n->state));
+    check(nvs_set_u8(h, key, static_cast<uint8_t>(n->state)));
   };
   write_hum(Schema::KEY_HUM_HIGH, smart_hum_high_, en.hh);
   write_hum(Schema::KEY_HUM_LOW, smart_hum_low_, en.hl);
@@ -394,27 +416,27 @@ void OemBleCompat::flush_hx_list_() {
   if (smart_hum_response_ && smart_hum_response_->has_state()) {
     uint8_t rank = ::qc::oem_speed_to_internal(
         ::qc::hum_response_to_oem(smart_hum_response_->current_option().c_str()));
-    nvs_set_u8(h, Schema::KEY_HUM_RANK, rank);
+    check(nvs_set_u8(h, Schema::KEY_HUM_RANK, rank));
   }
 
   // Timer defaults.
   if (default_run_number_ && !std::isnan(default_run_number_->state)) {
     int total = static_cast<int>(default_run_number_->state);
-    nvs_set_u8(h, "hour_set", static_cast<uint8_t>(total / 60));
-    nvs_set_u8(h, "minute_set", static_cast<uint8_t>(total % 60));
+    check(nvs_set_u8(h, "hour_set", static_cast<uint8_t>(total / 60)));
+    check(nvs_set_u8(h, "minute_set", static_cast<uint8_t>(total % 60)));
   }
 
   // Fan info.
-  nvs_set_str(h, "nnn", fan_info_.name);
-  nvs_set_str(h, "mmm", fan_info_.model);
-  nvs_set_str(h, "lll", fan_info_.serial);
-  nvs_set_str(h, "GuideSetup", fan_info_.guide_setup);
+  check(nvs_set_str(h, "nnn", fan_info_.name));
+  check(nvs_set_str(h, "mmm", fan_info_.model));
+  check(nvs_set_str(h, "lll", fan_info_.serial));
+  check(nvs_set_str(h, "GuideSetup", fan_info_.guide_setup));
 
   // Presets — write for current DIP wiring.
   const NvsPresetKeys *pkeys = nvs_preset_keys_for_dip(current_dip_());
   if (pkeys) {
-    nvs_set_u8(h, pkeys->count_key, presets_.count);
-    nvs_set_u8(h, pkeys->tag_key, 0x66);
+    check(nvs_set_u8(h, pkeys->count_key, presets_.count));
+    check(nvs_set_u8(h, pkeys->tag_key, 0x66));
 
     for (int slot = 0; slot < presets_.count && slot < 4; slot++) {
       auto &p = presets_.presets[slot];
@@ -425,12 +447,12 @@ void OemBleCompat::flush_hx_list_() {
       // duplicates saves ~16 NVS entry slots on the tight 16 KB partition.
       char key[20];
       pkeys->format_name_key(slot, key, sizeof(key));
-      nvs_set_str(h, key, p.name);
+      check(nvs_set_str(h, key, p.name));
 
       for (int j = 0; j < 6; j++) {
         char val_key[12];
         pkeys->format_value_key(slot, j, val_key, sizeof(val_key));
-        nvs_set_i16(h, val_key, p.values[j]);
+        check(nvs_set_i16(h, val_key, p.values[j]));
       }
     }
   }
@@ -438,11 +460,23 @@ void OemBleCompat::flush_hx_list_() {
   // OEM section tags.
   // "flag" (i8 0x61='a') = Smart Mode/timer section — NOT "flag_PhoneID" (pair sentinel).
   // "hubID" (u8 0x66='f') = fan-info section.
-  nvs_set_i8(h, "flag", 0x61);
-  nvs_set_u8(h, "hubID", 0x66);
+  check(nvs_set_i8(h, "flag", 0x61));
+  check(nvs_set_u8(h, "hubID", 0x66));
 
-  nvs_commit(h);
+  check(nvs_commit(h));
+  // The old bank remains intact until all destination writes are committed.
+  // Only then mark the layout current, so a failed migration retries safely.
+  if (error == ESP_OK && pkeys && !preset_bank_schema_current_) {
+    check(nvs_set_u8(h, ::qc::PRESET_BANK_SCHEMA_KEY, 1));
+    check(nvs_commit(h));
+    if (error == ESP_OK) preset_bank_schema_current_ = true;
+  }
   nvs_close(h);
+  if (error != ESP_OK) {
+    ESP_LOGW(TAG, "hx_list flush failed (%s); will retry", esp_err_to_name(error));
+    return;
+  }
+  hx_dirty_ = false;
   ESP_LOGI(TAG, "hx_list NVS synced (thresholds + fan info + presets + timer)");
 }
 
@@ -1228,7 +1262,7 @@ std::string OemBleCompat::handle_get_parameter_() {
 // Report the production channel's exact OEM firmware version so the Smart Control
 // app's broken inequality check (device-version != cloud-version => "update
 // available") sees us as current and stops nagging. Our firmware is
-// feature-equivalent regardless of this compatibility string.
+// local-control protocol is compatible; intentional differences are documented.
 std::string OemBleCompat::handle_get_version_() {
   return ::qc::get_version_response();
 }
@@ -1253,10 +1287,7 @@ std::string OemBleCompat::handle_get_router_() {
 
 // A=5 GetUpgradeState — minimal flash feedback (see handle_upgrade_).
 std::string OemBleCompat::handle_get_upgrade_state_() {
-  char buf[64];
-  snprintf(buf, sizeof(buf), R"({"A":5,"S":"%s","P":"0"})",
-           ::qc::upgrade_state_string(upgrade_state_));
-  return buf;
+  return ::qc::get_upgrade_state_response(upgrade_state_);
 }
 
 // A=6 SetTempHumidity
@@ -1681,56 +1712,51 @@ void OemBleCompat::import_fan_info_from_nvs_() {
            fan_info_.name, fan_info_.model);
 }
 
-void OemBleCompat::import_presets_from_nvs_() {
-  uint8_t dip = current_dip_();
+::qc::PresetImportResult OemBleCompat::import_presets_from_nvs_(uint8_t dip) {
+  using Result = ::qc::PresetImportResult;
   const NvsPresetKeys *keys = nvs_preset_keys_for_dip(dip);
   if (!keys) {
     ESP_LOGD(TAG, "No preset import: DIP=%d (invalid/none)", dip);
-    return;
+    return Result::Absent;
   }
 
   nvs_handle_t h;
-  if (nvs_open("hx_list", NVS_READONLY, &h) != ESP_OK) return;
+  esp_err_t err = nvs_open("hx_list", NVS_READONLY, &h);
+  if (err != ESP_OK)
+    return err == ESP_ERR_NVS_NOT_FOUND ? Result::Absent : Result::Error;
 
   uint8_t tag = 0;
-  if (nvs_get_u8(h, keys->tag_key, &tag) != ESP_OK || tag != 0x66) {
+  err = nvs_get_u8(h, keys->tag_key, &tag);
+  if (err != ESP_OK || tag != 0x66) {
     nvs_close(h);
     ESP_LOGD(TAG, "No OEM presets in NVS (%s tag missing)", keys->tag_key);
-    return;
+    return err == ESP_OK || err == ESP_ERR_NVS_NOT_FOUND ? Result::Absent : Result::Error;
   }
 
   uint8_t count = 0;
-  nvs_get_u8(h, keys->count_key, &count);
-  if (count == 0 || count > 4) {
+  if (nvs_get_u8(h, keys->count_key, &count) != ESP_OK || count > 4) {
     nvs_close(h);
-    return;
+    return Result::Error;
   }
 
-  presets_ = PresetStorage{};
-  for (int slot = 0; slot < count; slot++) {
-    auto &p = presets_.presets[slot];
-
-    char name_key[16];
-    keys->format_name_key(slot, name_key, sizeof(name_key));
-    size_t len = 0;
-    if (nvs_get_str(h, name_key, nullptr, &len) == ESP_OK && len > 1) {
-      if (len > sizeof(p.name)) len = sizeof(p.name);
-      nvs_get_str(h, name_key, p.name, &len);
-    }
-
-    for (int j = 0; j < 6; j++) {
-      char val_key[12];
-      keys->format_value_key(slot, j, val_key, sizeof(val_key));
-      int16_t val = 0;
-      nvs_get_i16(h, val_key, &val);
-      p.values[j] = val;
-    }
-  }
-  presets_.count = count;
-
+  const bool ok = ::qc::read_preset_entries(presets_, count,
+      [&](int slot, char *name, size_t len) {
+        char key[16];
+        keys->format_name_key(slot, key, sizeof(key));
+        const size_t capacity = len;
+        return nvs_get_str(h, key, name, &len) == ESP_OK &&
+               len > 0 && len <= capacity && name[len - 1] == '\0';
+      },
+      [&](int slot, int index, int16_t &value) {
+        char key[12];
+        keys->format_value_key(slot, index, key, sizeof(key));
+        return nvs_get_i16(h, key, &value) == ESP_OK;
+      });
   nvs_close(h);
+  if (!ok) return Result::Error;
   preset_pref_.save(&presets_);
   ESP_LOGI(TAG, "Imported %d preset(s) from OEM NVS (prefix=%s)", count, keys->value_prefix);
+  return Result::Loaded;
 }
 
 // ── Preset select CRUD ─────────────────────────────────────────────
@@ -1809,6 +1835,7 @@ void OemBleCompat::snapshot_thresholds_into_preset_(uint8_t idx) {
 }
 
 void OemBleCompat::save_preset(const std::string &name) {
+  if (this->is_failed()) return;
   if (name.empty() || name.size() > 50) {
     ESP_LOGW(TAG, "save_preset: name empty or too long");
     return;
@@ -1842,6 +1869,7 @@ void OemBleCompat::save_preset(const std::string &name) {
 }
 
 void OemBleCompat::delete_preset(const std::string &name) {
+  if (this->is_failed()) return;
   if (presets_.count <= 1) {
     ESP_LOGW(TAG, "delete_preset: refusing — at least 1 preset must remain");
     return;
@@ -1874,6 +1902,7 @@ void OemBleCompat::delete_preset(const std::string &name) {
 }
 
 void OemBleCompat::rename_preset(const std::string &old_name, const std::string &new_name) {
+  if (this->is_failed()) return;
   if (new_name.empty() || new_name.size() > 50) {
     ESP_LOGW(TAG, "rename_preset: new name empty or too long");
     return;
@@ -1902,12 +1931,12 @@ void OemBleCompat::on_threshold_changed() {
 
 // OEM sentinel byte stored at "flag_PhoneID" when the pair store is active.
 // Anything else is treated as an empty/uninitialised store.
-static constexpr uint8_t PAIR_FLAG_SENTINEL = 0x41;
+using ::qc::PAIR_FLAG_SENTINEL;
 
 // Hard ceiling on Phone<N> slots in the OEM hx_list namespace. The scan/append/
 // clear helpers below all bound themselves by this, so the configured
 // max_pair_ids can never exceed it (the YAML schema caps it to the same value).
-static constexpr int MAX_PAIR_SLOTS = 50;
+using ::qc::MAX_PAIR_SLOTS;
 
 // Opens hx_list RO iff the OEM pair-flag sentinel is present, and reads
 // pair_num. Returns true with the handle live; false (handle closed, *num=0)
@@ -1964,23 +1993,22 @@ bool OemBleCompat::nvs_add_pair_id_(const std::string &id) {
   // Validate sentinel first — consistent with nvs_has_pair_id_/nvs_pair_count_.
   // If flag is invalid (e.g. after a clear), start fresh at pair_num=0.
   uint8_t flag = 0;
-  nvs_get_u8(h, "flag_PhoneID", &flag);
+  esp_err_t err = nvs_get_u8(h, "flag_PhoneID", &flag);
+  if (err != ESP_OK && err != ESP_ERR_NVS_NOT_FOUND) {
+    nvs_close(h);
+    return false;
+  }
   uint8_t num = 0;
-  if (flag == PAIR_FLAG_SENTINEL)
-    nvs_get_u8(h, "pair_num", &num);
-  if (num >= MAX_PAIR_SLOTS) { nvs_close(h); return false; }
-
-  num++;
-  char key[10];
-  snprintf(key, sizeof(key), "Phone%d", num);
-  esp_err_t err = nvs_set_str(h, key, id.c_str());
-  if (err != ESP_OK) { nvs_close(h); return false; }
-
-  nvs_set_u8(h, "pair_num", num);
-  nvs_set_u8(h, "flag_PhoneID", PAIR_FLAG_SENTINEL);
-  nvs_commit(h);
+  if (flag == PAIR_FLAG_SENTINEL && nvs_get_u8(h, "pair_num", &num) != ESP_OK) {
+    nvs_close(h);
+    return false;
+  }
+  const bool ok = ::qc::persist_pair_id(id, num,
+      [h](const char *key, const char *value) { return nvs_set_str(h, key, value) == ESP_OK; },
+      [h](const char *key, uint8_t value) { return nvs_set_u8(h, key, value) == ESP_OK; },
+      [h]() { return nvs_commit(h) == ESP_OK; });
   nvs_close(h);
-  return true;
+  return ok;
 }
 
 // Wipe all Phone* entries, reset pair_num to 0, clear the flag sentinel.

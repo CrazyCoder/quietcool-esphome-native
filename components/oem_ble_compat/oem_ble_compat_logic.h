@@ -19,6 +19,83 @@
 
 namespace qc {
 
+// OEM preset banks, confirmed in both V4.1 and V4.4.
+struct NvsPresetKeys {
+  const char *value_prefix;
+  char name_char;
+  const char *count_key;
+  const char *tag_key;
+
+  void format_name_key(int slot, char *out, size_t n) const {
+    std::snprintf(out, n, "testname%c%d", name_char, slot + 1);
+  }
+  void format_value_key(int slot, int j, char *out, size_t n) const {
+    std::snprintf(out, n, "%s%d", value_prefix, (slot + 1) * 10 + j);
+  }
+};
+
+inline const NvsPresetKeys *nvs_preset_keys_for_dip(uint8_t dip) {
+  static constexpr NvsPresetKeys med{"Med", 'm', "medsize1", "PresetsMed"};
+  static constexpr NvsPresetKeys low{"Low", 'l', "lowsize1", "PresetsLow"};
+  static constexpr NvsPresetKeys high{"High", 'h', "highsize1", "PresetsHigh"};
+  switch (dip) {
+    case 1: return &med;   // TwoSpeed
+    case 2: return &high;  // ThreeSpeed
+    case 3: return &low;   // OneSpeed
+    default: return nullptr;
+  }
+}
+
+// Earlier replacement builds reversed Low/High. A valid saved preference
+// identifies an existing installation; its hx_list bank may be newer than
+// that cache. Once the corrected bank is committed, stop reading the old bank.
+inline uint8_t preset_import_dip(uint8_t dip, bool has_saved_presets,
+                                 bool schema_current) {
+  if (has_saved_presets && !schema_current && (dip == 2 || dip == 3))
+    return dip == 2 ? 3 : 2;
+  return dip;
+}
+
+static constexpr const char *PRESET_BANK_SCHEMA_KEY = "qc_presets_v2";
+static constexpr uint8_t PAIR_FLAG_SENTINEL = 0x41;
+static constexpr uint8_t MAX_PAIR_SLOTS = 50;
+
+enum class PresetImportResult { Absent, Loaded, Error };
+
+// Do not turn a partial NVS read into a complete, zero-filled preset bank.
+// Staging also preserves the caller's fallback until every field is read.
+template<typename Storage, typename ReadName, typename ReadValue>
+bool read_preset_entries(Storage &destination, uint8_t count,
+                         ReadName read_name, ReadValue read_value) {
+  Storage staged{};
+  if (count > 4) return false;
+  for (uint8_t slot = 0; slot < count; ++slot) {
+    auto &preset = staged.presets[slot];
+    if (!read_name(slot, preset.name, sizeof(preset.name))) return false;
+    for (int j = 0; j < 6; ++j) {
+      int16_t value = 0;
+      if (!read_value(slot, j, value)) return false;
+      preset.values[j] = value;
+    }
+  }
+  staged.count = count;
+  destination = staged;
+  return true;
+}
+
+// Callbacks return true only for successful NVS operations. Short-circuit
+// failures; callers close the handle and must not authenticate on failure.
+template<typename WriteString, typename WriteU8, typename Commit>
+bool persist_pair_id(const std::string &id, uint8_t count,
+                     WriteString write_string, WriteU8 write_u8, Commit commit) {
+  if (count >= MAX_PAIR_SLOTS) return false;
+  char key[10];
+  std::snprintf(key, sizeof(key), "Phone%u", unsigned(count + 1));
+  return write_string(key, id.c_str()) &&
+         write_u8("pair_num", count + 1) &&
+         write_u8("flag_PhoneID", PAIR_FLAG_SENTINEL) && commit();
+}
+
 // ── Pair-state machine ──────────────────────────────────────────────
 
 enum class PairState : uint8_t {
@@ -459,7 +536,7 @@ inline std::string get_work_state_response(const char *mode, const char *speed,
 // This is not this project's own release version. Keep the exact response
 // host-tested so a future cloud-version bump is an intentional change.
 inline const char *get_version_response() {
-  return R"({"A":3,"V":"IT-BLT-ATTICFAN_V4.1","P":100,"D":"2025.11.18","M":"online","H":"A"})";
+  return R"({"A":3,"V":"IT-BLT-ATTICFAN_V4.4","P":100,"D":"2025.11.18","M":"online","H":"A"})";
 }
 
 // ── Fan model catalogue (from APK CommConstants + MyUtils.getDeviceModel) ──
@@ -588,6 +665,12 @@ inline const char *upgrade_state_string(uint8_t s) {
     case UPGRADE_STATE_FAIL:        return "Download_Fail";
     default:                        return "Connect_NO";
   }
+}
+
+inline std::string get_upgrade_state_response(uint8_t state) {
+  // Match V4.4's numeric type. HTTP OTA blocks the loop, so this is not a
+  // claim of live progress; retain the documented zero-progress placeholder.
+  return std::string(R"({"A":5,"S":")") + upgrade_state_string(state) + R"(","P":0})";
 }
 
 inline bool validate_ssid(const std::string &ssid) {

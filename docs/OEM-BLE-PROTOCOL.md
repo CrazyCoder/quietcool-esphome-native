@@ -239,7 +239,7 @@ Transitions:
   list. On V4.1 the hub **drops the BLE connection right after a successful
   `Pair`** — the client must reconnect and `Login` with the new id to confirm it
   persisted.
-- **1 → 0.** Reboot, or `Reset` (A=22, full factory reset).
+- **1 → 0.** Reboot, or `Reset` (A=22; see the reset scope in §5.15).
 
 ### The pairing list
 
@@ -248,6 +248,9 @@ Transitions:
 - **Cap is 50.** When `pair_num` reaches 50, `Pair` returns `R:"Beyond"` and the
   only recovery is a factory reset (there is no BLE command to decrement the
   counter).
+- On OEM V4.4, `Beyond` also covers failed `PhoneN` or `pair_num` writes; it
+  does not prove the list is full. Its new ten-entry boot cache does not change
+  the 50-pair limit.
 - **Factory test pair-id.** Never-paired units ship with a factory test id
   `1234567dsad8wqw9asasd` pre-loaded as `Phone1`. It authenticates with no
   button press — which is how a brand-new hub can be flashed via the web
@@ -276,7 +279,7 @@ requires pair mode (`pair_state==2`); **auth** = requires `pair_state==1`.
 | --- | --------------- | -------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 1   | GetWorkState    | read     | auth     | Mode + temperature + humidity + sensor health + speed                                                                                                                                                                                                             |
 | 2   | GetParameter    | read     | auth     | All Smart Mode + Timer thresholds ([§7](#7-modes--smart-mode))                                                                                                                                                                                                    |
-| 3   | GetVersion      | read     | auth     | Software/hardware version, build date, over-temp cutoff                                                                                                                                                                                                           |
+| 3   | GetVersion      | read     | auth     | Software/hardware version, stored creation date, over-temp cutoff                                                                                                                                                                                                 |
 | 4   | GetRouter       | read     | auth     | Currently-stored Wi-Fi SSID + password (returned over BLE)                                                                                                                                                                                                        |
 | 5   | GetUpgradeState | read     | auth\*   | OTA progress state ([§9](#9-firmware-update-ota-flow))                                                                                                                                                                                                            |
 | 6   | SetTempHumidity | write    | auth     | Write Smart Mode thresholds ([§7.3](#73-settemphumidity))                                                                                                                                                                                                         |
@@ -295,7 +298,7 @@ requires pair mode (`pair_state==2`); **auth** = requires `pair_state==1`.
 | 19  | GetPresets      | read     | auth     | List saved Smart Mode presets ([§8](#8-presets))                                                                                                                                                                                                                  |
 | 20  | SetPresets      | write    | auth     | Write the saved preset list                                                                                                                                                                                                                                       |
 | 21  | SetGuideSetup   | write    | auth     | Setup-wizard flag; the app writes `"No"` on every control-screen entry ([§7.2](#72-getparameter))                                                                                                                                                                 |
-| 22  | Reset           | write    | auth     | **Factory reset** — wipes NVS incl. pairing list                                                                                                                                                                                                                  |
+| 22  | Reset           | write    | auth     | Reset OEM `hx_list` settings, including pairings; replacement reset is broader (§5.15)                                                                                                                                                                            |
 | 28  | GetRecordData   | read     | auth     | 31-day hourly sensor log (binary, [§10](#10-binary-commands))                                                                                                                                                                                                     |
 | 29  | SynchronizeTime | write    | auth     | Set the hub's clock (binary, [§10](#10-binary-commands))                                                                                                                                                                                                          |
 
@@ -334,8 +337,9 @@ the V1 named equivalent is `{"Api":"<verb>", …}` with the long field names fro
 
 Requires `pair_state == 2`. Generate a 16-hex-char id (the OEM convention).
 After success, **reconnect and `Login` with the new id** to confirm — V4.1
-closes the link on a successful pair. `R:"Beyond"` means the 50-pair cap was
-hit.
+closes the link on a successful pair. `R:"Beyond"` indicates the 50-pair cap or,
+on OEM V4.4, a failed `PhoneN` or `pair_num` write. The replacement returns
+`R:"Fail"` for persistence failures instead.
 
 ### 5.3 PairMode (A=15) — requires auth
 
@@ -380,16 +384,24 @@ cross-device coordination.
 
 ```jsonc
 {"A":3}
-{"A":3,"V":"IT-BLT-ATTICFAN_V4.1","P":182,"D":"2025.11.18","M":"…","H":"A"}
+// Illustrative OEM response; D varies with the stored Create_Date.
+{"A":3,"V":"IT-BLT-ATTICFAN_V4.4","P":182,"D":"2025.11.18","M":"…","H":"A"}
 ```
 
-`V` = software version, `P` = over-temp protection cutoff (°F), `D` = build
-date, `M` = build/create mode, `H` = MCU/hardware version.
+`V` = software version, `P` = over-temp protection cutoff (°F), `D` = stored
+creation date, `M` = build/create mode, `H` = MCU/hardware version. On OEM
+firmware, `D` comes from `Create_Date` in NVS, not the application build date.
 
-#### V4.1 versus V4.3
+As of 2026-09-20, QuietCool's production and QC channels both advertise V4.4.
+The replacement reports `IT-BLT-ATTICFAN_V4.4` but retains `2025.11.18` as its
+legacy compatibility date; that is not an OEM V4.4 build-date claim. This
+identity is separate from the ESPHome project's release version. Published
+`1.3.1` still reports V4.1; the V4.4 identity is a subsequent source change.
 
-As of 2026-07-12, QuietCool's update service advertises V4.3 on its QC and
-engineering channels while the production channel remains V4.1. We compared the
+#### Historical V4.1 versus V4.3 comparison
+
+On 2026-07-12, QuietCool's update service advertised V4.3 on its QC and
+engineering channels while the production channel remained V4.1. We compared the
 complete OEM V4.1 and V4.3 ESP32 application images before choosing the
 compatibility version reported by this firmware.
 
@@ -408,16 +420,34 @@ rather than a hub capability.
 The Smart Control app does not perform a newer-than comparison. Its update
 screen increments the available-update count whenever
 `BigDecimal(deviceVersion).compareTo(BigDecimal(channelVersion)) != 0`.
-Consequently, a device reporting V4.3 is incorrectly offered the production
+Consequently, a device reporting V4.3 was incorrectly offered the production
 channel's older V4.1 image because `4.3 != 4.1`. This was confirmed live against
 the app on 2026-07-12.
 
-This compatibility implementation therefore answers `GetVersion` with the
-production channel's exact `IT-BLT-ATTICFAN_V4.1` and date `2025.11.18`. This is
-deliberately an OEM compatibility identity, separate from the ESPHome project's
-own release version. It must track the channel selected by the app, not the
-highest OEM version number. Users on QC or engineering app channels may still
-see V4.3 offered.
+That result justified the earlier V4.1 compatibility identity. It does not
+establish equivalence with V4.4.
+
+#### V4.4 changes
+
+Static comparison of the OEM V4.1 and V4.4 images found no new command selectors
+or changes to control fields, authentication gates, Smart Mode, or binary
+framing. V4.4 does change OTA progress and persistence:
+
+- A=5 adds a numeric percentage `P` (§9).
+- DIP initialization removes the two unused preset banks (§8).
+- Pairing checks more storage failures, but some failures, including commit
+  failure, are still only logged. The replacement checks all persistence results
+  rather than copying those error paths.
+- History storage erases its five existing `Group_*` blobs before rewriting
+  them, fixes blob-length initialization, and retains matching same-day samples
+  after a restart. The binary history layout is unchanged.
+- Reset still clears `hx_list` and restores defaults, now with factory metadata
+  write-back and fuller name-buffer clearing (§5.15).
+
+These are static-analysis findings, not V4.4 hardware round-trip results.
+Migration from a V4.4-programmed hub and restoration to V4.4 remain untested.
+Local Smart Mode and `C:0` remain supported; AirControl coordination and OEM
+historical charts remain unsupported by the replacement.
 
 ### 5.6 GetRouter (A=4)
 
@@ -506,12 +536,17 @@ See [§9](#9-firmware-update-ota-flow) — the OTA trio.
 
 ```jsonc
 {"A":22,"G":"…"}                  // request reuses the SetGuideSetup "G" field
-{"A":22,"F":"TRUE"}               // ack is sent, THEN the hub wipes NVS and reboots
+{"A":22,"F":"TRUE"}               // acknowledgement precedes the deferred reset
 ```
 
-**Destructive.** Wipes the entire NVS, including the pairing list and Wi-Fi
-credentials. The hub returns the ack first, then performs the reset a moment
-later.
+**Destructive.** The inspected OEM reset path erases the `hx_list` namespace,
+including pairings, and restores defaults. V4.4 also writes back `Create_Date`
+and `HW_Version`. This path does not establish a full-NVS or Wi-Fi credential
+wipe, and it does not directly call `esp_restart`.
+
+The replacement deliberately differs: A=22 resets the entire NVS partition
+through ESPHome preferences reset, including Wi-Fi credentials, then reboots.
+That broader reset behavior is unchanged.
 
 ______________________________________________________________________
 
@@ -543,11 +578,11 @@ disambiguates (e.g. `P` is the pair-id on `Login` input but `PairState` on
 
 ### Result (`R`) values
 
-| `R`       | Meaning                                                                      |
-| --------- | ---------------------------------------------------------------------------- |
-| `Success` | Accepted and processed                                                       |
-| `Fail`    | Envelope problem — missing field, or a value longer than its buffer          |
-| `Beyond`  | Pair-counter overflow only (`pair_num` ≥ 50); recovery needs a factory reset |
+| `R`       | Meaning                                                                                                 |
+| --------- | ------------------------------------------------------------------------------------------------------- |
+| `Success` | Accepted and processed                                                                                  |
+| `Fail`    | Invalid input or failed authentication; the replacement also uses this for pairing persistence failures |
+| `Beyond`  | Pair counter ≥ 50; OEM V4.4 also uses this for failed `PhoneN` or `pair_num` writes                     |
 
 Setter commands generally use `F` (Flag) — `TRUE` = OK, `FALSE` = rejected —
 instead of or in addition to `R`.
@@ -712,6 +747,46 @@ So for a server (or this firmware): receiving `SetPresets` **without** a
 following `SetTempHumidity` is normal and means "the user saved a preset they
 didn't activate" — do not auto-apply preset values on `SetPresets`.
 
+### NVS banks and migration
+
+Both OEM V4.1 and V4.4 select the following banks. The enum is the internal DIP
+wiring value, not the number of speeds.
+
+| DIP enum | Wiring      | Bank   | Marker        | Count       |
+| -------- | ----------- | ------ | ------------- | ----------- |
+| 1        | Two-speed   | `Med`  | `PresetsMed`  | `medsize1`  |
+| 2        | Three-speed | `High` | `PresetsHigh` | `highsize1` |
+| 3        | One-speed   | `Low`  | `PresetsLow`  | `lowsize1`  |
+
+Earlier replacement code reversed the one-speed and three-speed banks. The
+correct mapping leaves two-speed unchanged. This is an existing mapping error,
+not a V4.4 schema change.
+
+The replacement stores one scalar migration marker, `hx_list/qc_presets_v2`. On
+an existing installation without that marker, a valid saved preset cache
+identifies the old layout. Startup reads the old bank first because it can
+contain newer threshold edits than the cache. The cache is the fallback when
+that bank is absent. A present but incomplete bank stops the component without
+overwriting it or completing migration. An explicitly empty bank stays empty.
+The next successful flush writes and commits the current preset list to the
+correct bank before recording the marker. Failed flushes retain the dirty state
+and retry after the normal delay.
+
+Fresh installations record the marker before creating a preset cache, then
+import the correct OEM bank. This prevents a restart before the first flush from
+misidentifying a new cache as an old installation. An unexpected marker read or
+initialization failure stops the compatibility component rather than guessing
+the layout or overwriting presets. Preset edits and shutdown writes are also
+blocked after failed setup.
+
+After migration, startup reads the corrected bank, with the cache as fallback.
+Only the current wiring's active preset list is migrated; other banks are not
+erased. This cannot recover presets already lost before the fix and is not a
+guarantee for downgrades to replacement versions with the old mapping.
+
+OEM V4.4 erases the two unused banks during DIP initialization; V4.1 retained
+them. The replacement does not copy that unused-bank deletion policy.
+
 ______________________________________________________________________
 
 ## 9. Firmware update (OTA) flow
@@ -778,7 +853,14 @@ should only point it at images you trust.)
 
 ### GetUpgradeState (A=5)
 
-Poll during/after an OTA. Response `S` is a state string:
+Poll during/after an OEM OTA. Response `S` is a state string.
+
+V4.1 returns `A` and `S`. V4.4 adds `P` as a JSON number, calculated as
+`bytes_written * 100 / content_length`:
+
+```json
+{"A":5,"S":"Downloading_Progress","P":42}
+```
 
 | `S` value              | Meaning                                                |
 | ---------------------- | ------------------------------------------------------ |
@@ -856,7 +938,8 @@ ______________________________________________________________________
 - **`Pair` disconnects on success** (V4.1) — reconnect and `Login` to confirm.
 - **First pairing is physical-button-only.** `PairMode` (A=15) needs an
   authenticated session; it cannot bootstrap the first pair remotely.
-- **Pair cap is 50** (`R:"Beyond"`); only a factory reset clears the counter.
+- **Pair cap is 50** (`R:"Beyond"`); only a factory reset clears the counter. On
+  OEM V4.4, `Beyond` can also mean a pairing storage write failed.
 - **Factory test pair-id** `1234567dsad8wqw9asasd` works only on never-paired
   hubs.
 - **`GetRouter` returns the Wi-Fi password in cleartext** over BLE, and
@@ -870,7 +953,8 @@ ______________________________________________________________________
 - **Once an OTA starts, only `GetUpgradeState` is answered**; all other commands
   are gated until reboot.
 - **`Reset` acks before wiping** — the `{A:22,"F":"TRUE"}` response is sent,
-  then NVS is wiped and the hub reboots.
+  then OEM `hx_list` settings are reset. Only the replacement explicitly
+  promises a full-NVS wipe and reboot (§5.15).
 - **No auth-mode field for Wi-Fi.** `SetRouter` carries only SSID + password;
   the hub accepts whatever security the AP advertises
   (open/WPA/WPA2/WPA3-mixed).
@@ -883,7 +967,7 @@ ______________________________________________________________________
   app polls ~every 10 s).
 - **Units ship with factory-baked Wi-Fi credentials** (a manufacturing test
   network) in NVS. They persist across an OTA. Not needed to operate the hub,
-  but worth wiping via a factory reset if you care.
+  but an OEM A=22 reset is not proven to erase them (§5.15).
 
 ______________________________________________________________________
 
@@ -893,17 +977,17 @@ This firmware's [`oem_ble_compat`](../components/oem_ble_compat/) component
 reimplements the protocol above so the **stock QuietCool Smart Control app keeps
 working** after you flash it: pairing, `Login`, `GetWorkState`, speed/mode
 control, Smart Mode thresholds, presets, and fan info all behave as the app
-expects (V2 numeric, `QQ` prefix, same field names, same gating). It is exposed
-as the `Smart Control (BLE)` switch and advertises the same `ATTICFAN_<mac>`
-name, with the fan model code in a manufacturer AD so the app's device list
-shows the product photo (see
+expects (V2 numeric, `QQ` prefix, the documented field names, and authenticated
+control). It is exposed as the `Smart Control (BLE)` switch and advertises the
+same `ATTICFAN_<mac>` name, with the fan model code in a manufacturer AD so the
+app's device list shows the product photo (see
 [Device name / advertising](#the-device-list-reads-raw-record-bytes)). The
 advertisement is rebuilt when the model changes, so a model set from Home
-Assistant or over BLE takes effect without a reboot. **Pairing is preserved
-exactly as on stock** — an unpaired hub enters pair mode only via a physical
-KEY2 press on the device, and `PairMode` (A=15) is auth-gated, so an in-range
-stranger can't pair themselves remotely (the physical button is the trust
-boundary — treating A=15 as pre-auth would be a remote-pairing hole).
+Assistant or over BLE takes effect without a reboot. **The physical-pairing
+trust boundary is unchanged** — an unpaired hub enters pair mode only via a
+physical KEY2 press on the device, and `PairMode` (A=15) is auth-gated, so an
+in-range stranger can't pair themselves remotely (the physical button is the
+trust boundary — treating A=15 as pre-auth would be a remote-pairing hole).
 
 The component leaves healthy idle BLE clients connected indefinitely, matching
 stock behavior for authenticated sessions. It retains each GATT connection's
@@ -957,8 +1041,20 @@ Where it **deliberately diverges** from stock:
 
 - **`GetUpgradeState` (A=5)** reports a minimal state sequence (`Connect_NO` →
   `Downloading_Progress` → `Download_Fail`) rather than the full stock
-  enumeration; note the HTTP download is blocking, so A=5 is meaningful
-  before/after but not pollable mid-download.
+  enumeration. It returns numeric `P:0` intentionally, not a measured
+  percentage. The HTTP download is blocking, so A=5 is meaningful before/after
+  but not pollable mid-download. The numeric field does not add live progress.
+
+- **Pairing persistence failures return `R:"Fail"`.** The replacement checks
+  every storage result, including counter, sentinel, and commit operations,
+  before accepting a new pairing. Unlike OEM V4.4, it does not report these
+  failures as `Beyond`.
+
+- **`Reset` (A=22) erases all NVS and reboots.** This deliberately exceeds the
+  inspected OEM `hx_list` reset scope (§5.15).
+
+- **Unused preset banks are not automatically deleted.** The replacement does
+  not copy OEM V4.4's DIP initialization cleanup (§8).
 
 - **`GetRouter` (A=4) does not leak the Wi-Fi password.** It returns the SSID
   and MAC but an empty password field — unlike stock, which returns the stored
@@ -996,7 +1092,7 @@ recovered much of V1 and (later) V2:
 - [rwarner/ha-quietcool-ble](https://github.com/rwarner/ha-quietcool-ble) — a
   Home Assistant integration speaking this protocol over BLE.
 
-This document consolidates and corrects those findings against the V4.1 firmware
-image, the analyzed Android build of the OEM Smart Control app, and live
-captures, and documents the two binary commands and the full V2 field-name map
-that the earlier clients did not have.
+This document consolidates and corrects those findings against the V4.1 and V4.4
+firmware images, the analyzed Android build of the OEM Smart Control app, and
+live captures, and documents the two binary commands and the full V2 field-name
+map that the earlier clients did not have.
