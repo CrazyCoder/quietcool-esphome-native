@@ -60,6 +60,22 @@ TEST("validate_phone_id: 101 chars → false") {
   REQUIRE(!validate_phone_id(std::string(101, 'x')));
 }
 
+TEST("GetWorkState: authenticated Smart Mode reports local control while idle") {
+  REQUIRE_EQ(check_gate(1, PairState::Auth, false), GateResult::Allowed);
+  REQUIRE_EQ(get_work_state_response(mode_to_oem(false, true, false), "OFF", true, 720, 45),
+             std::string(R"({"A":1,"M":"TH","R":"OFF","S":"OK","T":720,"H":45,"C":0})"));
+}
+
+TEST("GetWorkState: running fan still reports local control") {
+  REQUIRE_EQ(get_work_state_response(mode_to_oem(true, true, false), "HIGH", true, 950, 60),
+             std::string(R"({"A":1,"M":"TH","R":"HIGH","S":"OK","T":950,"H":60,"C":0})"));
+}
+
+TEST("GetWorkState: sensor fault does not imply AirControl") {
+  REQUIRE_EQ(get_work_state_response("Idle", "OFF", false, 0, 0),
+             std::string(R"({"A":1,"M":"Idle","R":"OFF","S":"NG","T":0,"H":0,"C":0})"));
+}
+
 TEST("GetVersion exactly matches the OEM production channel") {
   REQUIRE_EQ(std::string(get_version_response()),
              std::string(R"({"A":3,"V":"IT-BLT-ATTICFAN_V4.1","P":100,"D":"2025.11.18","M":"online","H":"A"})"));

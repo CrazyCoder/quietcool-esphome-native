@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -438,6 +439,17 @@ inline std::vector<uint8_t> binary_frame(uint8_t type,
   out.insert(out.end(), payload.begin(), payload.end());
   out.push_back('}');
   return out;
+}
+
+// C is ControlType, not BLE authentication: 1 means AirControl Venting Assist.
+// We implement local control only, so always report 0, including after login.
+inline std::string get_work_state_response(const char *mode, const char *speed,
+                                           bool sensor_ok, int temp_fx10, int humidity) {
+  char buf[128];
+  std::snprintf(buf, sizeof(buf),
+                R"({"A":1,"M":"%s","R":"%s","S":"%s","T":%d,"H":%d,"C":0})",
+                mode, speed, sensor_ok ? "OK" : "NG", temp_fx10, humidity);
+  return buf;
 }
 
 // A=3 GetVersion compatibility response. The Smart Control app incorrectly

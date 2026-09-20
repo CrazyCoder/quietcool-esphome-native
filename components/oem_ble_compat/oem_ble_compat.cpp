@@ -1152,13 +1152,7 @@ std::string OemBleCompat::handle_get_work_state_() {
   int hum = (humidity_sensor_ && !std::isnan(humidity_sensor_->state))
                 ? static_cast<int>(humidity_sensor_->state) : 0;
 
-  char buf[128];
-  snprintf(buf, sizeof(buf),
-           R"({"A":1,"M":"%s","R":"%s","S":"%s","T":%d,"H":%d,"C":%d})",
-           mode, speed_str, sensor_ok ? "OK" : "NG",
-           temp_fx10, hum,
-           pair_machine_.state == ::qc::PairState::Auth ? 1 : 0);
-  return buf;
+  return ::qc::get_work_state_response(mode, speed_str, sensor_ok, temp_fx10, hum);
 }
 
 // A=2 GetParameter
