@@ -784,6 +784,14 @@ Only the current wiring's active preset list is migrated; other banks are not
 erased. This cannot recover presets already lost before the fix and is not a
 guarantee for downgrades to replacement versions with the old mapping.
 
+An absent bank's tag is published after its values and count so an interrupted
+cache restore cannot expose a partially restored bank as authoritative. The
+[host migration suite](../components/oem_ble_compat/test/README.md) exercises
+the production startup/flush sequence for all wiring modes, with storage faults,
+reboots, and deliberate regressions. Physical one-/three-speed migration tests
+are optional for this storage-only change; physical verification is limited to
+the owner's two-speed candidate. Automated coverage is not a hardware claim.
+
 OEM V4.4 erases the two unused banks during DIP initialization; V4.1 retained
 them. The replacement does not copy that unused-bank deletion policy.
 

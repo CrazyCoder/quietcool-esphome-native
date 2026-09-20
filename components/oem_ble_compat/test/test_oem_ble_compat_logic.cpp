@@ -6,7 +6,7 @@
 //   ./test_oem_ble_compat_logic.exe
 
 #include "test_utils.h"
-#include "../oem_ble_compat_logic.h"
+#include "../oem_preset_storage.h"
 
 using namespace qc;
 
@@ -977,14 +977,8 @@ TEST("pair persistence checks each write and commit, stopping at any failure") {
   }
 }
 
-struct StoredPresetTest {
-  char name[51] = "";
-  int16_t values[6] = {};
-} __attribute__((packed));
-struct PresetBankTest {
-  uint8_t count = 0;
-  StoredPresetTest presets[4] = {};
-} __attribute__((packed));
+using StoredPresetTest = Preset;
+using PresetBankTest = PresetStorage;
 
 // Match production storage so passing a packed value by reference fails here.
 static_assert(alignof(StoredPresetTest) == 1 && alignof(PresetBankTest) == 1);

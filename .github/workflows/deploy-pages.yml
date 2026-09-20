@@ -38,6 +38,15 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Run host regression suites
+        run: |
+          set -euo pipefail
+          for source in components/*/test/test_*.cpp; do
+            exe="$RUNNER_TEMP/$(basename "${source%.cpp}")"
+            g++ -std=c++17 -Wall -Wextra -Wpedantic "$source" -o "$exe"
+            "$exe"
+          done
+
       # Capture this before ESPHome imports local components: Python may create
       # __pycache__ files under components/ during the build, and those generated
       # files must not make an unchanged source tree look like new firmware.

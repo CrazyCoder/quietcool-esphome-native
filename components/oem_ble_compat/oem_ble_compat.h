@@ -20,7 +20,7 @@
 #include "esphome/components/http_request/ota/ota_http_request.h"
 #include "esphome/components/ota/ota_backend.h"
 
-#include "oem_ble_compat_logic.h"
+#include "oem_preset_storage.h"
 #include "../fan_controller/fan_controller_logic.h"  // qc::SmartThreshold
 
 #include <esp_gap_ble_api.h>
@@ -114,7 +114,7 @@ class OemBleCompat : public Component, public ota::OTAGlobalStateListener {
   // Called from YAML on_value lambdas when any threshold/timer/fan-info
   // entity changes. Marks the hx_list write-through dirty; actual NVS
   // write is debounced to once per 30s (or immediately on shutdown).
-  void mark_hx_dirty() { hx_dirty_ = true; }
+  void mark_hx_dirty() { preset_persistence_.dirty = true; }
   // Threshold-specific variant: also deselects the active preset (since
   // live thresholds no longer match stored values). Skipped during
   // apply_preset_() to avoid self-deselection.
@@ -220,9 +220,8 @@ class OemBleCompat : public Component, public ota::OTAGlobalStateListener {
   int  nvs_pair_count_();
   void nvs_clear_pairs_();
 
-  // ── OEM NVS imports: fan info once, presets on every boot ──
+  // ── One-shot fan-info import; presets use qc::load_presets each boot ──
   void import_fan_info_from_nvs_();
-  ::qc::PresetImportResult import_presets_from_nvs_(uint8_t dip);
 
   // ── State snapshot helpers ──
   uint8_t current_speed_() const;
@@ -316,7 +315,7 @@ class OemBleCompat : public Component, public ota::OTAGlobalStateListener {
   // the fan name. That write does not reach flash, because fan_info_pref_ has
   // no backend until setup() assigns it and save() returns false on a null
   // backend. setup() then overwrites the struct anyway, so the residue today
-  // is only a stray hx_dirty_. All of that correctness rests on setup order,
+  // is only a stray dirty flag. All of that correctness rests on setup order,
   // so ignore entity-originated writes until setup() establishes fan_info_.
   bool fan_info_loaded_ = false;
 
@@ -326,8 +325,7 @@ class OemBleCompat : public Component, public ota::OTAGlobalStateListener {
 
   // Debounced write-through: current ESPHome entity state → OEM hx_list NVS.
   // Covers thresholds, timer defaults, fan info, presets, guide_setup.
-  bool hx_dirty_ = false;
-  bool preset_bank_schema_current_ = false;
+  ::qc::PresetPersistenceState preset_persistence_;
   ::qc::HxFlushTimer hx_flush_timer_;
   static constexpr uint32_t HX_FLUSH_DELAY_MS = 30000;
   void flush_hx_list_();
@@ -343,14 +341,8 @@ class OemBleCompat : public Component, public ota::OTAGlobalStateListener {
   ESPPreferenceObject fan_info_pref_;
 
   // Presets storage (up to 4 presets × 7 fields)
-  struct Preset {
-    char name[51] = "";
-    int16_t values[6] = {};  // [speed_enum, temp_h, temp_m, temp_l, hum_h, hum_l]
-  } __attribute__((packed));
-  struct PresetStorage {
-    uint8_t count = 0;
-    Preset presets[4] = {};
-  } __attribute__((packed));
+  using Preset = ::qc::Preset;
+  using PresetStorage = ::qc::PresetStorage;
   PresetStorage presets_;
   ESPPreferenceObject preset_pref_;
 

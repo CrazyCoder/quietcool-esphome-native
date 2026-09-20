@@ -66,8 +66,44 @@ static const uint32_t FANINFO_PREF_HASH = 0x71636202;
 static const uint32_t PRESET_PREF_HASH = 0x71636203;
 static const uint32_t ACTIVE_PRESET_PREF_HASH = 0x71636204;
 
-using ::qc::NvsPresetKeys;
-using ::qc::nvs_preset_keys_for_dip;
+// Thin ESP-IDF adapter; the startup/flush sequence is shared with host tests.
+struct PresetNvsStore {
+  nvs_handle_t handle;
+  esp_err_t error = ESP_OK;
+
+  ::qc::PresetRead read_result(esp_err_t result) {
+    error = result;
+    if (result == ESP_OK) return ::qc::PresetRead::Ok;
+    if (result == ESP_ERR_NVS_NOT_FOUND) return ::qc::PresetRead::Missing;
+    return ::qc::PresetRead::Error;
+  }
+  ::qc::PresetRead read_u8(const char *key, uint8_t &value) {
+    return read_result(nvs_get_u8(handle, key, &value));
+  }
+  ::qc::PresetRead read_i16(const char *key, int16_t &value) {
+    return read_result(nvs_get_i16(handle, key, &value));
+  }
+  ::qc::PresetRead read_string(const char *key, char *value, size_t capacity) {
+    size_t len = capacity;
+    auto result = read_result(nvs_get_str(handle, key, value, &len));
+    if (result == ::qc::PresetRead::Ok &&
+        (len == 0 || len > capacity || value[len - 1] != '\0')) {
+      error = ESP_ERR_INVALID_STATE;
+      return ::qc::PresetRead::Error;
+    }
+    return result;
+  }
+  bool write_u8(const char *key, uint8_t value) {
+    return (error = nvs_set_u8(handle, key, value)) == ESP_OK;
+  }
+  bool write_i16(const char *key, int16_t value) {
+    return (error = nvs_set_i16(handle, key, value)) == ESP_OK;
+  }
+  bool write_string(const char *key, const char *value) {
+    return (error = nvs_set_str(handle, key, value)) == ESP_OK;
+  }
+  bool commit() { return (error = nvs_commit(handle)) == ESP_OK; }
+};
 
 // ── Lifecycle ───────────────────────────────────────────────────────
 
@@ -87,53 +123,24 @@ void OemBleCompat::setup() {
   // first installs import the correct OEM bank. Never erase the source bank.
   preset_pref_ = global_preferences->make_preference<PresetStorage>(PRESET_PREF_HASH, true);
   PresetStorage saved{};
-  const bool has_saved = preset_pref_.load(&saved) && saved.count <= 4;
+  const bool has_saved = preset_pref_.load(&saved);
   nvs_handle_t h;
-  esp_err_t schema_error = nvs_open("hx_list", NVS_READONLY, &h);
-  if (schema_error == ESP_OK) {
-    uint8_t schema = 0;
-    schema_error = nvs_get_u8(h, ::qc::PRESET_BANK_SCHEMA_KEY, &schema);
-    preset_bank_schema_current_ = schema == 1;
-    if (schema_error == ESP_OK && !preset_bank_schema_current_)
-      schema_error = ESP_ERR_INVALID_STATE;
-    nvs_close(h);
-  }
-  if (schema_error != ESP_OK && schema_error != ESP_ERR_NVS_NOT_FOUND) {
-    ESP_LOGE(TAG, "Cannot read preset schema (%s); preserving preset storage",
-             esp_err_to_name(schema_error));
+  if (nvs_open("hx_list", NVS_READWRITE, &h) != ESP_OK) {
+    ESP_LOGE(TAG, "Cannot open preset storage; preserving presets");
     this->mark_failed();
     return;
   }
-  // On a first installation, persist the schema before creating any preset
-  // preference. Otherwise a restart before the first flush would mistake that
-  // new cache for evidence of an old, reversed-bank installation.
-  if (!has_saved && !preset_bank_schema_current_) {
-    esp_err_t err = nvs_open("hx_list", NVS_READWRITE, &h);
-    if (err == ESP_OK) {
-      err = nvs_set_u8(h, ::qc::PRESET_BANK_SCHEMA_KEY, 1);
-      if (err == ESP_OK) err = nvs_commit(h);
-      nvs_close(h);
-    }
-    if (err != ESP_OK) {
-      ESP_LOGE(TAG, "Cannot initialize preset schema (%s); preserving preset storage",
-               esp_err_to_name(err));
-      this->mark_failed();
-      return;
-    }
-    preset_bank_schema_current_ = true;
-  }
-  presets_ = PresetStorage{};
-  const auto imported = import_presets_from_nvs_(::qc::preset_import_dip(
-      current_dip_(), has_saved, preset_bank_schema_current_));
+  PresetNvsStore store{h};
+  const auto imported = ::qc::load_presets(
+      store, current_dip_(), has_saved, saved, presets_, preset_persistence_,
+      [this](const PresetStorage &presets) { preset_pref_.save(&presets); });
+  nvs_close(h);
   if (imported == ::qc::PresetImportResult::Error) {
-    ESP_LOGE(TAG, "Incomplete preset bank; preserving storage without migration");
+    ESP_LOGE(TAG, "Cannot load preset storage (%s); preserving presets without migration",
+             esp_err_to_name(store.error == ESP_OK ? ESP_ERR_INVALID_STATE : store.error));
     this->mark_failed();
     return;
   }
-  if (imported == ::qc::PresetImportResult::Absent && has_saved)
-    presets_ = saved;
-  if (!preset_bank_schema_current_ && nvs_preset_keys_for_dip(current_dip_()))
-    mark_hx_dirty();  // Commit corrected bank before its schema marker.
 
   server_ = esp32_ble_server::global_ble_server;
   ota::get_global_ota_callback()->add_global_state_listener(this);
@@ -248,7 +255,7 @@ void OemBleCompat::loop() {
   // partition is nearly full, so never perform it while a BLE client is live:
   // blocking the main loop can fill ESPHome's lossy GATTS event queue and drop
   // the disconnect event that restarts advertising.
-  if (hx_dirty_) {
+  if (preset_persistence_.dirty) {
     hx_flush_timer_.start_if_needed(now_ms);
     const bool ble_client_connected =
         server_ != nullptr && server_->get_connected_client_count() != 0;
@@ -372,7 +379,7 @@ void OemBleCompat::dump_config() {
 }
 
 void OemBleCompat::on_shutdown() {
-  if (hx_dirty_) flush_hx_list_();
+  if (preset_persistence_.dirty) flush_hx_list_();
 }
 
 // Flush current ESPHome entity state into OEM hx_list NVS keys so a
@@ -432,51 +439,21 @@ void OemBleCompat::flush_hx_list_() {
   check(nvs_set_str(h, "lll", fan_info_.serial));
   check(nvs_set_str(h, "GuideSetup", fan_info_.guide_setup));
 
-  // Presets — write for current DIP wiring.
-  const NvsPresetKeys *pkeys = nvs_preset_keys_for_dip(current_dip_());
-  if (pkeys) {
-    check(nvs_set_u8(h, pkeys->count_key, presets_.count));
-    check(nvs_set_u8(h, pkeys->tag_key, 0x66));
-
-    for (int slot = 0; slot < presets_.count && slot < 4; slot++) {
-      auto &p = presets_.presets[slot];
-
-      // Write primary name only. OEM firmware triplicates each name
-      // (testnamem1 / testnamem11 / testnamem111) but only the primary copy is
-      // read by GetPresets and our import_presets_from_nvs_(). Skipping the
-      // duplicates saves ~16 NVS entry slots on the tight 16 KB partition.
-      char key[20];
-      pkeys->format_name_key(slot, key, sizeof(key));
-      check(nvs_set_str(h, key, p.name));
-
-      for (int j = 0; j < 6; j++) {
-        char val_key[12];
-        pkeys->format_value_key(slot, j, val_key, sizeof(val_key));
-        check(nvs_set_i16(h, val_key, p.values[j]));
-      }
-    }
-  }
-
   // OEM section tags.
   // "flag" (i8 0x61='a') = Smart Mode/timer section — NOT "flag_PhoneID" (pair sentinel).
   // "hubID" (u8 0x66='f') = fan-info section.
   check(nvs_set_i8(h, "flag", 0x61));
   check(nvs_set_u8(h, "hubID", 0x66));
 
-  check(nvs_commit(h));
-  // The old bank remains intact until all destination writes are committed.
-  // Only then mark the layout current, so a failed migration retries safely.
-  if (error == ESP_OK && pkeys && !preset_bank_schema_current_) {
-    check(nvs_set_u8(h, ::qc::PRESET_BANK_SCHEMA_KEY, 1));
-    check(nvs_commit(h));
-    if (error == ESP_OK) preset_bank_schema_current_ = true;
-  }
+  PresetNvsStore store{h};
+  const bool flushed = ::qc::flush_presets(
+      store, current_dip_(), presets_, preset_persistence_, error == ESP_OK);
   nvs_close(h);
-  if (error != ESP_OK) {
-    ESP_LOGW(TAG, "hx_list flush failed (%s); will retry", esp_err_to_name(error));
+  if (!flushed) {
+    ESP_LOGW(TAG, "hx_list flush failed (%s); will retry",
+             esp_err_to_name(error != ESP_OK ? error : store.error));
     return;
   }
-  hx_dirty_ = false;
   ESP_LOGI(TAG, "hx_list NVS synced (thresholds + fan info + presets + timer)");
 }
 
@@ -1710,53 +1687,6 @@ void OemBleCompat::import_fan_info_from_nvs_() {
   fan_info_pref_.save(&fan_info_);
   ESP_LOGI(TAG, "Imported fan info from OEM NVS: name='%s' model='%s'",
            fan_info_.name, fan_info_.model);
-}
-
-::qc::PresetImportResult OemBleCompat::import_presets_from_nvs_(uint8_t dip) {
-  using Result = ::qc::PresetImportResult;
-  const NvsPresetKeys *keys = nvs_preset_keys_for_dip(dip);
-  if (!keys) {
-    ESP_LOGD(TAG, "No preset import: DIP=%d (invalid/none)", dip);
-    return Result::Absent;
-  }
-
-  nvs_handle_t h;
-  esp_err_t err = nvs_open("hx_list", NVS_READONLY, &h);
-  if (err != ESP_OK)
-    return err == ESP_ERR_NVS_NOT_FOUND ? Result::Absent : Result::Error;
-
-  uint8_t tag = 0;
-  err = nvs_get_u8(h, keys->tag_key, &tag);
-  if (err != ESP_OK || tag != 0x66) {
-    nvs_close(h);
-    ESP_LOGD(TAG, "No OEM presets in NVS (%s tag missing)", keys->tag_key);
-    return err == ESP_OK || err == ESP_ERR_NVS_NOT_FOUND ? Result::Absent : Result::Error;
-  }
-
-  uint8_t count = 0;
-  if (nvs_get_u8(h, keys->count_key, &count) != ESP_OK || count > 4) {
-    nvs_close(h);
-    return Result::Error;
-  }
-
-  const bool ok = ::qc::read_preset_entries(presets_, count,
-      [&](int slot, char *name, size_t len) {
-        char key[16];
-        keys->format_name_key(slot, key, sizeof(key));
-        const size_t capacity = len;
-        return nvs_get_str(h, key, name, &len) == ESP_OK &&
-               len > 0 && len <= capacity && name[len - 1] == '\0';
-      },
-      [&](int slot, int index, int16_t &value) {
-        char key[12];
-        keys->format_value_key(slot, index, key, sizeof(key));
-        return nvs_get_i16(h, key, &value) == ESP_OK;
-      });
-  nvs_close(h);
-  if (!ok) return Result::Error;
-  preset_pref_.save(&presets_);
-  ESP_LOGI(TAG, "Imported %d preset(s) from OEM NVS (prefix=%s)", count, keys->value_prefix);
-  return Result::Loaded;
 }
 
 // ── Preset select CRUD ─────────────────────────────────────────────

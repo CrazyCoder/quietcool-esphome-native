@@ -33,6 +33,18 @@ echo.
 echo === Run ===
 .\test_oem_ble_compat_logic.exe
 set "RC=%ERRORLEVEL%"
+if not "%RC%"=="0" goto done
 
+echo.
+echo === Preset persistence lifecycle ===
+g++ -std=c++17 -Wall -Wextra -Wpedantic -I.. test_oem_preset_storage.cpp -o test_oem_preset_storage.exe
+if errorlevel 1 (
+    set "RC=1"
+    goto done
+)
+.\test_oem_preset_storage.exe
+set "RC=%ERRORLEVEL%"
+
+:done
 popd
 endlocal & exit /b %RC%
