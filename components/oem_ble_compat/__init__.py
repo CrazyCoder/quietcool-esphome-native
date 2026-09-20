@@ -7,6 +7,7 @@
 import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome.components import (
+    esp32,
     esp32_ble,
     number,
     select,
@@ -15,8 +16,8 @@ from esphome.components import (
     text,
     text_sensor,
 )
-from esphome.const import CONF_ID
 from esphome.components.http_request.ota import OtaHttpRequestComponent
+from esphome.const import CONF_ID
 
 CODEOWNERS = ["@CrazyCoder"]
 DEPENDENCIES = ["esp32_ble_server", "text"]
@@ -102,6 +103,9 @@ CONFIG_SCHEMA = cv.Schema(
 
 
 async def to_code(config):
+    # ESPHome 2026.9 excludes these by default; we use cJSON and esp_coexist.h.
+    esp32.include_builtin_idf_component("json")
+    esp32.include_builtin_idf_component("esp_coex")
     var = cg.new_Pvariable(config[CONF_ID])
     await cg.register_component(var, config)
     cg.add_define("USE_OTA_STATE_LISTENER")
