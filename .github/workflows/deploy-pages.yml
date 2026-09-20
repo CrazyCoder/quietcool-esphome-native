@@ -14,7 +14,7 @@
 name: Deploy Web installer
 
 env:
-  ESPHOME_VERSION: "2026.8.1"
+  ESPHOME_VERSION: "2026.9.0"
 
 on:
   workflow_dispatch:
