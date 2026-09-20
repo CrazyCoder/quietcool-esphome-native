@@ -1261,8 +1261,8 @@ std::string OemBleCompat::handle_get_parameter_() {
 // A=3 GetVersion
 // Report the production channel's exact OEM firmware version so the Smart Control
 // app's broken inequality check (device-version != cloud-version => "update
-// available") sees us as current and stops nagging. Our firmware is
-// local-control protocol is compatible; intentional differences are documented.
+// available") sees us as current and stops nagging. The local-control protocol
+// is compatible; intentional differences are documented.
 std::string OemBleCompat::handle_get_version_() {
   return ::qc::get_version_response();
 }

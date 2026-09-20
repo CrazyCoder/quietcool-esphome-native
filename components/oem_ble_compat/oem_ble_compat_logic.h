@@ -73,6 +73,7 @@ bool read_preset_entries(Storage &destination, uint8_t count,
     auto &preset = staged.presets[slot];
     if (!read_name(slot, preset.name, sizeof(preset.name))) return false;
     for (int j = 0; j < 6; ++j) {
+      // Production storage is packed; callbacks need an aligned scalar reference.
       int16_t value = 0;
       if (!read_value(slot, j, value)) return false;
       preset.values[j] = value;

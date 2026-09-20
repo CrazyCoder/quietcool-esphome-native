@@ -905,7 +905,7 @@ TEST("upgrade_state_string: unknown → Connect_NO (default)") {
 }
 
 // ============================================================================
-// main
+// Preset storage and pairing persistence
 // ============================================================================
 
 TEST("preset banks match OEM one/two/three-speed wiring and every slot key") {
@@ -980,11 +980,14 @@ TEST("pair persistence checks each write and commit, stopping at any failure") {
 struct StoredPresetTest {
   char name[51] = "";
   int16_t values[6] = {};
-};
+} __attribute__((packed));
 struct PresetBankTest {
   uint8_t count = 0;
   StoredPresetTest presets[4] = {};
-};
+} __attribute__((packed));
+
+// Match production storage so passing a packed value by reference fails here.
+static_assert(alignof(StoredPresetTest) == 1 && alignof(PresetBankTest) == 1);
 
 TEST("preset import stages all fields and preserves destination on every read failure") {
   for (int fail_at = 0; fail_at <= 28; ++fail_at) {

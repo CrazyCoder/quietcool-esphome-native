@@ -220,7 +220,7 @@ class OemBleCompat : public Component, public ota::OTAGlobalStateListener {
   int  nvs_pair_count_();
   void nvs_clear_pairs_();
 
-  // ── One-shot OEM NVS import (first boot only) ──
+  // ── OEM NVS imports: fan info once, presets on every boot ──
   void import_fan_info_from_nvs_();
   ::qc::PresetImportResult import_presets_from_nvs_(uint8_t dip);
 
