@@ -35,11 +35,12 @@ supported; use Home Assistant for history. The native iOS/Android apps can
 control an installed hub; the browser-based installer still does not support
 iOS/iPadOS.
 
-**Release 1.3.1:** fixes the misleading AirControl Venting Assist status in the
-OEM app and supports ESPHome 2026.9.0 builds and BLE advertising. An iPad test
-confirmed that idle Smart Mode now reports its temperature threshold instead of
-AirControl. The release does not add historical charts or change Smart Mode
-thresholds.
+**Release 1.3.2:** reports the OEM 4.4 compatibility identity to match the
+QuietCool update service. It corrects one-/three-speed preset-bank mapping,
+protects preset migration against interrupted writes, and checks pairing
+persistence failures. Automated fault tests cover all wiring modes; physical
+verification covers the two-speed candidate. ESPHome 2026.9.0 support and the
+AirControl status fix from 1.3.1 are retained.
 
 ## ▶ Install it now — nothing to build
 
@@ -752,7 +753,7 @@ Works the same on Windows, macOS, and Linux. Install the ESPHome CLI first —
 `uv tool install esphome` (or `pip install esphome`); ESPHome 2026.5+ is
 required and enforced by `min_version` in the YAML.
 
-Shared release 1.3.1 is built with pinned ESPHome **2026.9.0**. Device Builder
+Shared release 1.3.2 is built with pinned ESPHome **2026.9.0**. Device Builder
 uses its own installed ESPHome version. The minimum remains 2026.5.0; it is not
 the release compiler pin. Current components explicitly include the `json` and
 `esp_coex` IDF libraries and manage the advertising request required by 2026.9.

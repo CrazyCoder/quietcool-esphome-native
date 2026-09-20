@@ -393,10 +393,11 @@ creation date, `M` = build/create mode, `H` = MCU/hardware version. On OEM
 firmware, `D` comes from `Create_Date` in NVS, not the application build date.
 
 As of 2026-09-20, QuietCool's production and QC channels both advertise V4.4.
-The replacement reports `IT-BLT-ATTICFAN_V4.4` but retains `2025.11.18` as its
-legacy compatibility date; that is not an OEM V4.4 build-date claim. This
-identity is separate from the ESPHome project's release version. Published
-`1.3.1` still reports V4.1; the V4.4 identity is a subsequent source change.
+The current replacement firmware reports `IT-BLT-ATTICFAN_V4.4` but retains
+`2025.11.18` as its legacy compatibility date; that is not an OEM V4.4
+build-date claim. This identity is separate from the ESPHome project's release
+version, which is maintained in
+[`firmware-version.yaml`](../firmware-version.yaml).
 
 #### Historical V4.1 versus V4.3 comparison
 
