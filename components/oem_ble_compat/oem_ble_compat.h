@@ -296,6 +296,8 @@ class OemBleCompat : public Component, public ota::OTAGlobalStateListener {
   // or RUNNING state. After one Improv session the service stays STOPPED, so
   // the next start request (Wi-Fi down past Improv's wifi_timeout, or a KEY2
   // hold) keeps should_start() set without Improv ever becoming active.
+  // check_improv_start_() restarts that stopped service, and want_active_()
+  // stops yielding to a request that still has not started.
   static constexpr uint32_t IMPROV_RESTART_AFTER_MS = 10000;
   static constexpr uint32_t IMPROV_YIELD_LIMIT_MS = 30000;
   ::qc::StallMonitor improv_restart_monitor_{IMPROV_RESTART_AFTER_MS};
