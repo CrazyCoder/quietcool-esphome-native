@@ -189,7 +189,9 @@ bool OemBleCompat::want_active_() const {
   // Improv before its service reaches an active state. Without this check OEM
   // BLE can start during that gap and leave ATTICFAN data in the scan response.
   const bool improv_busy =
-      (improv_ != nullptr && (improv_->is_active() || improv_->should_start()));
+      (improv_ != nullptr &&
+       (improv_->is_active() ||
+        (improv_->should_start() && !improv_yield_monitor_.stalled())));
   return user_wants && !improv_busy;
 }
 
@@ -213,6 +215,7 @@ void OemBleCompat::loop() {
   publish_ble_active_clients_();
 
   const uint32_t now_ms = millis();
+  check_improv_start_(now_ms);
   bool want_active = want_active_();
 
   if (want_active && !service_created_) {
@@ -237,6 +240,16 @@ void OemBleCompat::loop() {
     ESP_LOGI(TAG, "Restarting OEM BLE service after toggle");
     service_->start();
     pending_restart_ = false;
+  }
+
+  const bool server_running = server_ != nullptr && server_->is_running();
+  if (oem_start_monitor_.update(want_active && server_running &&
+                                    !service_started_ && !ota_in_progress_(),
+                                now_ms)) {
+    ESP_LOGW(TAG, "OEM BLE service did not start within %u s",
+             static_cast<unsigned>(OEM_START_LIMIT_MS / 1000));
+    begin_ble_stack_recovery_("OEM service start stalled");
+    return;
   }
 
   run_ble_link_health_check_(want_active && service_started_, now_ms);
@@ -314,6 +327,30 @@ void OemBleCompat::run_ble_link_health_check_(bool oem_active,
   }
 }
 
+void OemBleCompat::check_improv_start_(uint32_t now_ms) {
+  if (improv_ == nullptr)
+    return;
+  const bool start_pending = server_ != nullptr && server_->is_running() &&
+                             improv_->should_start() && !improv_->is_active();
+  const bool was_yield_stalled = improv_yield_monitor_.stalled();
+  improv_yield_monitor_.update(start_pending, now_ms);
+  if (improv_yield_monitor_.stalled() && !was_yield_stalled)
+    ESP_LOGW(TAG, "Improv did not start within %u s; resuming OEM BLE",
+             static_cast<unsigned>(IMPROV_YIELD_LIMIT_MS / 1000));
+
+  if (!improv_restart_monitor_.update(start_pending, now_ms))
+    return;
+  // Improv's loop resumes from RUNNING, so starting the stopped service is
+  // enough. Leave every other state to Improv and to the yield limit.
+  auto *service = server_->get_service(
+      esp32_ble::ESPBTUUID::from_raw(improv::SERVICE_UUID));
+  if (service == nullptr || service->is_created() || service->is_starting() ||
+      service->is_running() || service->is_failed())
+    return;
+  ESP_LOGW(TAG, "Improv start request stalled; restarting its BLE service");
+  service->start();
+}
+
 void OemBleCompat::reset_ble_stack() {
   const uint8_t client_count =
       server_ != nullptr ? server_->get_client_count() : 0;
@@ -354,6 +391,7 @@ void OemBleCompat::begin_ble_stack_recovery_(const char *reason) {
   // characteristic's CCCD notification list. A complete stack cycle invokes
   // BLEServer::ble_before_disabled_event_handler(), which clears both.
   ble_link_health_monitor_.reset();
+  oem_start_monitor_.reset();
   clear_ble_peers_();
   framer_.clear();
 #if ESPHOME_VERSION_CODE >= VERSION_CODE(2026, 9, 0)

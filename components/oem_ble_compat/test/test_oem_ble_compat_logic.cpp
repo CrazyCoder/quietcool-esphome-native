@@ -316,6 +316,55 @@ TEST("BLE link probe interval handles millis wraparound") {
       START + BleLinkHealthMonitor::PROBE_INTERVAL_MS));
 }
 
+TEST("stall monitor ignores a condition that clears within the limit") {
+  StallMonitor monitor(100);
+  REQUIRE(!monitor.update(true, 1000));
+  REQUIRE(!monitor.update(true, 1099));
+  REQUIRE(!monitor.stalled());
+  REQUIRE(!monitor.update(false, 1100));
+  REQUIRE(!monitor.update(true, 1150));
+  REQUIRE(!monitor.update(true, 1249));
+  REQUIRE(!monitor.stalled());
+}
+
+TEST("stall monitor paces recovery attempts while stalled") {
+  StallMonitor monitor(100);
+  REQUIRE(!monitor.update(true, 1000));
+  REQUIRE(monitor.update(true, 1100));
+  REQUIRE(monitor.stalled());
+  REQUIRE(!monitor.update(true, 1101));
+  REQUIRE(!monitor.update(true, 1199));
+  REQUIRE(monitor.stalled());
+  REQUIRE(monitor.update(true, 1200));
+  REQUIRE(!monitor.update(true, 1250));
+}
+
+TEST("stall monitor starts a new episode after the condition clears") {
+  StallMonitor monitor(100);
+  REQUIRE(!monitor.update(true, 1000));
+  REQUIRE(monitor.update(true, 1100));
+  REQUIRE(!monitor.update(false, 1150));
+  REQUIRE(!monitor.stalled());
+  REQUIRE(!monitor.update(true, 1160));
+  REQUIRE(!monitor.update(true, 1259));
+  REQUIRE(monitor.update(true, 1260));
+}
+
+TEST("stall monitor accepts millis zero and wraparound") {
+  StallMonitor from_zero(100);
+  REQUIRE(!from_zero.update(true, 0));
+  REQUIRE(!from_zero.update(true, 99));
+  REQUIRE(from_zero.update(true, 100));
+
+  StallMonitor wrapping(100);
+  constexpr uint32_t START = 0xFFFFFFC0U;
+  REQUIRE(!wrapping.update(true, START));
+  REQUIRE(!wrapping.update(true, START + 99));
+  REQUIRE(wrapping.update(true, START + 100));
+  REQUIRE(!wrapping.update(true, START + 199));
+  REQUIRE(wrapping.update(true, START + 200));
+}
+
 // ============================================================================
 // 4d. NVS flush gating
 // ============================================================================

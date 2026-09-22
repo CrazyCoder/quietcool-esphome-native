@@ -620,6 +620,13 @@ safe mode doesn't need the custom components to compile cleanly).
 | **Need to roll back to stock OEM firmware**                                                                 | See [Going back to stock](#going-back-to-stock) below. HA and physical-button restores use the verified CDN image; the hub's own `/restore-stock` page can use a firmware URL or upload any locally saved OEM application image directly over the LAN. The Web Installer links to that local page; UART remains the universal offline fallback.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | **Need to push a fresh firmware image**                                                                     | Any OTA path in [Updating a running hub](#updating-a-hub-already-running-this-firmware) — `esphome run`, the dashboard, HTTP flash, or BLE. From HA, the **Safe Mode** button is helpful if the current firmware is unstable. Worst case: UART reflash (BOOT pin held LOW, `esptool write-flash` to `0x20000` or `0x200000`) — always works.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 
+The firmware recovers two stuck BLE states without help. If an Improv-BLE start
+request does not take effect within 10 s, the firmware restarts the Improv
+service. If Improv is still not active after 30 s, Smart Control stops waiting
+for it and advertises again. If the Smart Control service does not start within
+30 s, the firmware resets the BLE stack and sets **BLE Last Reset Reason** to
+`OEM service start stalled`.
+
 If BLE stops repeatedly, schedule `button.press` for
 `button.<device>_reset_ble_stack` during a quiet period. Include **BLE Active
 Clients**, **BLE Advertising Status**, **BLE Stack Resets**, **BLE Last Reset

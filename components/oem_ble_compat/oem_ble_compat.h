@@ -144,6 +144,7 @@ class OemBleCompat : public Component, public ota::OTAGlobalStateListener {
   void start_service_();
   void stop_service_();
   void run_ble_link_health_check_(bool oem_active, uint32_t now_ms);
+  void check_improv_start_(uint32_t now_ms);
   void begin_ble_stack_recovery_(const char *reason);
   void publish_ble_active_clients_();
   void publish_ble_advertising_status_(const char *event, int status);
@@ -251,8 +252,9 @@ class OemBleCompat : public Component, public ota::OTAGlobalStateListener {
 
   // True when the OEM BLE service should be running right now: the user wants
   // it on (enable switch unset or ON) AND Improv-BLE isn't currently
-  // advertising or has been requested and is still starting. Computed fresh
-  // each loop() — no persisted "was on" flag.
+  // advertising or has been requested and is still starting. A request that
+  // has not started within IMPROV_YIELD_LIMIT_MS no longer counts. Computed
+  // fresh each loop() — no persisted "was on" flag.
   bool want_active_() const;
 
   // ── Members ──
@@ -290,6 +292,18 @@ class OemBleCompat : public Component, public ota::OTAGlobalStateListener {
   bool pending_restart_ = false;
   std::array<TrackedBlePeer, USE_ESP32_BLE_MAX_CONNECTIONS> ble_peers_{};
   ::qc::BleLinkHealthMonitor ble_link_health_monitor_;
+  // ESPHome's Improv component starts its GATT service only from the CREATED
+  // or RUNNING state. After one Improv session the service stays STOPPED, so
+  // the next start request (Wi-Fi down past Improv's wifi_timeout, or a KEY2
+  // hold) keeps should_start() set without Improv ever becoming active.
+  static constexpr uint32_t IMPROV_RESTART_AFTER_MS = 10000;
+  static constexpr uint32_t IMPROV_YIELD_LIMIT_MS = 30000;
+  ::qc::StallMonitor improv_restart_monitor_{IMPROV_RESTART_AFTER_MS};
+  ::qc::StallMonitor improv_yield_monitor_{IMPROV_YIELD_LIMIT_MS};
+  // A lost GATTS create or start event leaves the OEM service down with
+  // nothing left to retry it. A stack cycle re-creates every service.
+  static constexpr uint32_t OEM_START_LIMIT_MS = 30000;
+  ::qc::StallMonitor oem_start_monitor_{OEM_START_LIMIT_MS};
   bool ble_recovery_pending_ = false;
   bool ota_active_ = false;
   int last_adv_start_status_ = -1;

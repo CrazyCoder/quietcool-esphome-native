@@ -262,6 +262,53 @@ class BleLinkHealthMonitor {
   uint8_t stale_confirmations_ = 0;
 };
 
+// Watches a BLE state that normally clears within a few loop iterations. Once
+// the condition has held for stall_ms it is stalled, and a recovery attempt is
+// due immediately and then once per stall_ms while the condition persists.
+// Clearing the condition ends the episode.
+class StallMonitor {
+ public:
+  explicit StallMonitor(uint32_t stall_ms) : stall_ms_(stall_ms) {}
+
+  // Returns true when a recovery attempt is due.
+  bool update(bool condition, uint32_t now_ms) {
+    if (!condition) {
+      reset();
+      return false;
+    }
+    if (!pending_) {
+      pending_ = true;
+      since_ms_ = now_ms;
+      return false;
+    }
+    if (!stalled_) {
+      if (now_ms - since_ms_ < stall_ms_)
+        return false;
+      stalled_ = true;
+    } else if (now_ms - last_attempt_ms_ < stall_ms_) {
+      return false;
+    }
+    last_attempt_ms_ = now_ms;
+    return true;
+  }
+
+  bool stalled() const { return stalled_; }
+
+  void reset() {
+    pending_ = false;
+    stalled_ = false;
+    since_ms_ = 0;
+    last_attempt_ms_ = 0;
+  }
+
+ private:
+  uint32_t stall_ms_;
+  bool pending_ = false;
+  bool stalled_ = false;
+  uint32_t since_ms_ = 0;
+  uint32_t last_attempt_ms_ = 0;
+};
+
 // ── OEM field format helpers ────────────────────────────────────────
 
 // Temperature: our sensors are °C; OEM wire format is °F × 10 (integer).
