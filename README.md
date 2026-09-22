@@ -35,12 +35,12 @@ supported; use Home Assistant for history. The native iOS/Android apps can
 control an installed hub; the browser-based installer still does not support
 iOS/iPadOS.
 
-**Release 1.3.2:** reports the OEM 4.4 compatibility identity to match the
-QuietCool update service. It corrects one-/three-speed preset-bank mapping,
-protects preset migration against interrupted writes, and checks pairing
-persistence failures. Automated fault tests cover all wiring modes; physical
-verification covers the two-speed candidate. ESPHome 2026.9.0 support and the
-AirControl status fix from 1.3.1 are retained.
+**Release 1.3.3:** fixes a hub that stops appearing in the Smart Control app
+while Home Assistant still works. After one Improv-BLE session, the next Improv
+request (Wi-Fi down for more than 90 s, or a KEY2 hold) never took effect, and
+Smart Control waited for it until a reboot or BLE stack reset. The firmware now
+restarts Improv and resumes Smart Control automatically. The OEM 4.4 identity,
+preset fixes, and ESPHome 2026.9.0 support from 1.3.2 are retained.
 
 ## ▶ Install it now — nothing to build
 
@@ -760,7 +760,7 @@ Works the same on Windows, macOS, and Linux. Install the ESPHome CLI first —
 `uv tool install esphome` (or `pip install esphome`); ESPHome 2026.5+ is
 required and enforced by `min_version` in the YAML.
 
-Shared release 1.3.2 is built with pinned ESPHome **2026.9.0**. Device Builder
+Shared release 1.3.3 is built with pinned ESPHome **2026.9.0**. Device Builder
 uses its own installed ESPHome version. The minimum remains 2026.5.0; it is not
 the release compiler pin. Current components explicitly include the `json` and
 `esp_coex` IDF libraries and manage the advertising request required by 2026.9.
