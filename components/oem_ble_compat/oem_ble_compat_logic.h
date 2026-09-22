@@ -1,7 +1,7 @@
 // OEM BLE protocol logic — pure C++17, no ESPHome includes.
-// Covers: pair-state and idle-client recovery machines, command gate checks,
-// OEM field-format conversions, BLE frame assembly, and response builders for
-// each of the 22 JSON commands. Tested host-side via
+// Covers: pair-state and idle-client recovery machines, BLE stall monitoring,
+// command gate checks, OEM field-format conversions, BLE frame assembly, and
+// response builders for each of the 22 JSON commands. Tested host-side via
 // test/test_oem_ble_compat_logic.cpp.
 //
 // The ESPHome wrapper (oem_ble_compat.h/.cpp) owns the GATT service, JSON
