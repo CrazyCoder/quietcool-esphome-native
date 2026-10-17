@@ -992,9 +992,12 @@ fan:
     # Smart Mode — sensor + threshold wiring. The decision tree runs every
     # 10s (see the interval: block above) while Smart Mode is active.
     # Calibration-corrected readings so Cal: T / Cal: H shift the trigger points
-    # (and the over-temp safety cutoff) rather than only the display.
+    # rather than only the display.
     temp_sensor: sht30_temp_c_cal
     humidity_sensor: sht30_humidity_cal
+    # The over-temp safety cutoff reads the uncalibrated temperature, as the
+    # OEM does, so Cal: T cannot raise or lower the 182 °F trip point.
+    overtemp_sensor: sht30_temp_c
     smart_temp_high: smart_temp_high
     smart_temp_med: smart_temp_med
     smart_temp_low: smart_temp_low
@@ -1043,19 +1046,22 @@ number:
     on_value:
       - lambda: 'id(oem_ble).mark_hx_dirty();'
 
-  # --- Temperature offset (°F delta) — added to the user-visible °F reading to
-  # null out per-unit sensor error. Defaults to 0.0 (no correction) so
-  # out-of-the-box behavior matches the OEM. Typical attic-mounted readings run
-  # 3-8 °C (5-14 °F) high due to enclosure self-heating; setting this to about
-  # -6 °F nulls that. `restore_value` persists the choice across reboots.
+  # --- Temperature offset (°F delta) — added to the SHT30 reading to null out
+  # per-unit sensor error. Defaults to 0.0 (no correction) so out-of-the-box
+  # behavior matches the OEM. Typical attic-mounted readings run 3-8 °C
+  # (5-14 °F) high due to enclosure self-heating; setting this to about -6 °F
+  # nulls that. `restore_value` persists the choice across reboots.
+  #
+  # The SHT30 handler converts the delta to °C (×5/9) and adds it at the source
+  # (sht30_temp_c_cal), so the corrected value feeds Smart Mode, BLE and the
+  # HA display. The over-temp safety cutoff reads the uncalibrated sht30_temp_c,
+  # as the OEM does, so the offset cannot move it.
   #
   # UNIT NOTE: this is a temperature *delta*. HA can only convert *absolute*
   # temperatures for imperial users (×9/5 + 32), which is wrong for a
   # difference — so the entity is declared in °F with NO
-  # `device_class: temperature` (HA shows it literally, no mis-conversion) and
-  # the firmware adds it directly to the °F reading. Display-only: the raw °C
-  # feeds Smart Mode and BLE. Same unit rationale as `Smart: Temp Hysteresis`.
-  # (Renamed from `temp_offset_c`; the °F change resets a saved value to 0.) ---
+  # `device_class: temperature` (HA shows it literally, no mis-conversion).
+  # Same unit rationale as `Smart: Temp Hysteresis`. ---
   - platform: template
     name: "Cal: T"
     id: temp_offset_f

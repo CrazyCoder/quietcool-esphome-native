@@ -794,20 +794,18 @@ void FanController::set_threshold_enabled(::qc::SmartThreshold t, bool en) {
 }
 
 void FanController::smart_tick() {
-  if (temp_sensor_ == nullptr || humidity_sensor_ == nullptr) return;
-  const float temp_c = temp_sensor_->state;
-  const float hum = humidity_sensor_->state;
-  const bool sensors_valid = std::isfinite(temp_c) && std::isfinite(hum);
   const uint32_t now = millis();
   const bool watchdogs_enabled = !watchdogs_disabled_();
 
-  if (sensors_valid) last_valid_sensor_ms_ = now;
-
   // --- Over-temp safety (all modes) ---
-  if (sensors_valid &&
-      ::qc::FanControllerLogic::overtemp_watchdog_tripped(watchdogs_enabled, temp_c)) {
+  // Needs only a finite temperature. Reads `overtemp_sensor` (the uncalibrated
+  // SHT30 reading, matching the OEM cutoff) when wired, else `temp_sensor`.
+  sensor::Sensor *overtemp_src = overtemp_sensor_ ? overtemp_sensor_ : temp_sensor_;
+  const float overtemp_c = overtemp_src ? overtemp_src->state : NAN;
+  if (std::isfinite(overtemp_c) &&
+      ::qc::FanControllerLogic::overtemp_watchdog_tripped(watchdogs_enabled, overtemp_c)) {
     ESP_LOGW(TAG, "OVER-TEMP SAFETY: %.1f°C >= %.1f°C cutoff — forcing OFF",
-             temp_c, ::qc::OVERTEMP_CUTOFF_C);
+             overtemp_c, ::qc::OVERTEMP_CUTOFF_C);
     overtemp_tripped_ = true;
     smart_mode_active_ = false;
     force_off_();
@@ -824,6 +822,11 @@ void FanController::smart_tick() {
     trip_watchdog_("Continuous runtime exceeded 24h");
     return;
   }
+
+  if (temp_sensor_ == nullptr || humidity_sensor_ == nullptr) return;
+  const float temp_c = temp_sensor_->state;
+  const float hum = humidity_sensor_->state;
+  if (std::isfinite(temp_c) && std::isfinite(hum)) last_valid_sensor_ms_ = now;
 
   if (!smart_mode_active_) return;
 

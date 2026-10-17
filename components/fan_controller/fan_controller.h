@@ -96,6 +96,7 @@ class FanController : public Component, public fan::Fan {
   // Smart Mode sensor + threshold wiring (populated by codegen from YAML).
   void set_temp_sensor(sensor::Sensor *s) { temp_sensor_ = s; }
   void set_humidity_sensor(sensor::Sensor *s) { humidity_sensor_ = s; }
+  void set_overtemp_sensor(sensor::Sensor *s) { overtemp_sensor_ = s; }
   void set_smart_temp_high(number::Number *n) { smart_temp_high_ = n; }
   void set_smart_temp_med(number::Number *n) { smart_temp_med_ = n; }
   void set_smart_temp_low(number::Number *n) { smart_temp_low_ = n; }
@@ -302,6 +303,7 @@ class FanController : public Component, public fan::Fan {
   uint32_t last_valid_sensor_ms_ = 0;
   sensor::Sensor *temp_sensor_ = nullptr;
   sensor::Sensor *humidity_sensor_ = nullptr;
+  sensor::Sensor *overtemp_sensor_ = nullptr;
   number::Number *smart_temp_high_ = nullptr;
   number::Number *smart_temp_med_ = nullptr;
   number::Number *smart_temp_low_ = nullptr;

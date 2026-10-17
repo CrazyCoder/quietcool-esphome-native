@@ -247,7 +247,7 @@ actions work in real-time.
 | `switch.<device>_disable_safety_watchdogs`  | OFF                  | **Risky override.** When ON, disables the 24-hour runtime, over-temperature, and stale-sensor protections. Turning it ON clears existing trips. Turning it OFF re-enables protection and starts a fresh 24-hour runtime window if the fan is already running. The setting persists across reboots.                                                          |
 | `switch.<device>_resume_on_boot`            | OFF                  | When ON, the firmware persists last speed + Smart Mode state and resumes after a controller reboot. Useful so a brief power blip doesn't kill night-cooling. OFF matches OEM cold-boot (safer).                                                                                                                                                             |
 | `switch.<device>_smart_t_high_enabled` (×5) | **ON**               | Per-rule enable switches for the five Smart Mode thresholds (T High / T Med / T Low / H High / H Low). Turning one OFF removes that rule from the decision tree. Stored per preset, like the threshold values.                                                                                                                                              |
-| `number.<device>_cal_t`                     | **0.0 °F**           | Calibration offset added to the SHT30 temperature reading. Feeds Smart Mode, the over-temp cutoff, and the app-reported temperature — not just the HA display. A **°F delta** (see the unit note below).                                                                                                                                                    |
+| `number.<device>_cal_t`                     | **0.0 °F**           | Calibration offset added to the SHT30 temperature reading. Feeds Smart Mode and the app-reported temperature — not just the HA display. The over-temp cutoff ignores it. A **°F delta** (see the unit note below).                                                                                                                                          |
 | `number.<device>_cal_h`                     | **0.0 %**            | Calibration offset added to the SHT30 humidity reading; also feeds Smart Mode.                                                                                                                                                                                                                                                                              |
 
 **Unit note (Temp Hysteresis and Cal: T):** both are temperature *differences*,
@@ -445,8 +445,9 @@ at `H High` does **not** trigger a stop.
 **Safety features** (ported from OEM firmware):
 
 - **Over-temperature cutoff**: if the SHT30 reads ≥ 83.3 °C (182 °F), all relays
-  are forced off regardless of mode. Latching — requires pressing "Reset
-  Watchdog" in HA to resume.
+  are forced off regardless of mode. Like the OEM, it uses the uncalibrated
+  reading, so `Cal: T` does not move the trip point. Latching — requires
+  pressing "Reset Watchdog" in HA to resume.
 - **24-hour continuous runtime watchdog**: if any relay has been on for 24
   consecutive hours (any mode, not just Smart), all relays are forced off.
   Prevents forgotten fans from running indefinitely. Latching — same reset

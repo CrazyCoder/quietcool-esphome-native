@@ -35,6 +35,7 @@ CONF_TIME_ID = "time_id"
 CONF_DEFAULT_RUN_MINUTES_NUMBER = "default_run_minutes_number"
 CONF_TEMP_SENSOR = "temp_sensor"
 CONF_HUMIDITY_SENSOR = "humidity_sensor"
+CONF_OVERTEMP_SENSOR = "overtemp_sensor"
 CONF_SMART_TEMP_HIGH = "smart_temp_high"
 CONF_SMART_TEMP_MED = "smart_temp_med"
 CONF_SMART_TEMP_LOW = "smart_temp_low"
@@ -124,6 +125,8 @@ CONFIG_SCHEMA = (
             # Smart Mode: sensor + threshold wiring
             cv.Optional(CONF_TEMP_SENSOR): cv.use_id(sensor.Sensor),
             cv.Optional(CONF_HUMIDITY_SENSOR): cv.use_id(sensor.Sensor),
+            # Over-temp safety cutoff input; falls back to temp_sensor.
+            cv.Optional(CONF_OVERTEMP_SENSOR): cv.use_id(sensor.Sensor),
             cv.Optional(CONF_SMART_TEMP_HIGH): cv.use_id(number.Number),
             cv.Optional(CONF_SMART_TEMP_MED): cv.use_id(number.Number),
             cv.Optional(CONF_SMART_TEMP_LOW): cv.use_id(number.Number),
@@ -208,6 +211,7 @@ async def to_code(config):
     for conf_key, setter in [
         (CONF_TEMP_SENSOR, "set_temp_sensor"),
         (CONF_HUMIDITY_SENSOR, "set_humidity_sensor"),
+        (CONF_OVERTEMP_SENSOR, "set_overtemp_sensor"),
         (CONF_SMART_TEMP_HIGH, "set_smart_temp_high"),
         (CONF_SMART_TEMP_MED, "set_smart_temp_med"),
         (CONF_SMART_TEMP_LOW, "set_smart_temp_low"),
